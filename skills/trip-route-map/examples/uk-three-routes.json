@@ -1,0 +1,92 @@
+{
+  "title": "英国 10 晚：三个方案",
+  "subtitle": "示例。D1 = 第一天；数字圆点是住几晚。",
+  "lang": "zh",
+  "places": {
+    "LON": {"name": "伦敦", "lonlat": [-0.128, 51.507]},
+    "LGW": {"name": "LGW", "lonlat": [-0.182, 51.153]},
+    "LHR": {"name": "希思罗", "lonlat": [-0.454, 51.470]},
+    "EDI": {"name": "爱丁堡", "lonlat": [-3.189, 55.953]},
+    "YORK": {"name": "约克", "lonlat": [-1.082, 53.960]},
+    "BATH": {"name": "巴斯", "lonlat": [-2.359, 51.381]},
+    "STONE": {"name": "巨石阵", "lonlat": [-1.826, 51.179]},
+    "GLENCOE": {"name": "格伦科", "lonlat": [-5.102, 56.682]},
+    "NESS": {"name": "尼斯湖", "lonlat": [-4.442, 57.324]},
+    "INV": {"name": "因弗内斯", "lonlat": [-4.224, 57.478]},
+    "PORTREE": {"name": "斯凯岛", "lonlat": [-6.196, 57.413]},
+    "EILEAN": {"name": "艾琳多南", "lonlat": [-5.516, 57.274]},
+    "GLENFINNAN": {"name": "格伦芬南桥", "lonlat": [-5.432, 56.876]},
+    "SEVEN": {"name": "七姐妹白崖", "lonlat": [0.200, 50.742]},
+    "LEWES": {"name": "刘易斯", "lonlat": [0.009, 50.873]},
+    "SALIS": {"name": "索尔兹伯里", "lonlat": [-1.795, 51.069]},
+    "WAREHAM": {"name": "多塞特", "lonlat": [-2.111, 50.686]},
+    "DURDLE": {"name": "杜德尔门", "lonlat": [-2.277, 50.621]},
+    "LACOCK": {"name": "拉科克", "lonlat": [-2.118, 51.415]},
+    "BOURTON": {"name": "科茨沃尔德", "lonlat": [-1.758, 51.885]},
+    "OXFORD": {"name": "牛津", "lonlat": [-1.258, 51.752]}
+  },
+  "routes": [
+    {
+      "id": "A", "title": "经典火车线", "highlight": true,
+      "bbox": [-7.0, 50.35, 1.9, 58.0],
+      "note": "伦敦 5 → 爱丁堡 4 → 希思罗 1。巴斯和高地是一日团。",
+      "legs": [
+        {"mode": "transfer", "via": ["LGW", "LON"]},
+        {"mode": "day", "via": ["LON", "STONE", "BATH"]},
+        {"mode": "train", "via": ["LON", [-0.24, 52.574], [-1.14, 53.522], "YORK", [-1.617, 54.968], [-2.004, 55.771], "EDI"], "label": "D6 火车"},
+        {"mode": "day", "via": ["EDI", "GLENCOE", [-5.105, 56.819], "NESS"]},
+        {"mode": "flight", "via": ["EDI", "LHR"], "label": "D10 航班"}
+      ],
+      "stops": [
+        {"place": "LGW", "kind": "air", "sub": "D1 落地"},
+        {"place": "LON", "nights": 5, "sub": "D1–5"},
+        {"place": "STONE"}, {"place": "BATH", "sub": "D5 一日团"},
+        {"place": "YORK", "sub": "中途下车"},
+        {"place": "EDI", "nights": 4, "sub": "D6–9"},
+        {"place": "GLENCOE"}, {"place": "NESS", "sub": "D9 一日团"},
+        {"place": "LHR", "kind": "air", "sub": "D10 住机场"}
+      ],
+      "notes": [{"lonlat": [1.2, 56.2], "text": "北海"}]
+    },
+    {
+      "id": "C", "title": "苏格兰高地自驾",
+      "bbox": [-7.05, 55.8, -2.35, 57.75],
+      "note": "伦敦 3 晚在图外；D4 飞因弗内斯取车，D7 到爱丁堡还车。",
+      "legs": [
+        {"mode": "flight", "via": ["LHR", "INV"], "label": "D4 从伦敦飞来", "bend": -0.15},
+        {"mode": "car", "via": ["INV", "NESS", "EILEAN", [-5.714, 57.28], "PORTREE"]},
+        {"mode": "car", "via": ["PORTREE", [-6.177, 57.507], [-6.29, 57.63], [-6.36, 57.586], "PORTREE"]},
+        {"mode": "car", "via": ["PORTREE", [-5.714, 57.28], [-4.787, 57.066], [-5.105, 56.819], "GLENFINNAN", [-5.105, 56.819], "GLENCOE"]},
+        {"mode": "car", "via": ["GLENCOE", [-4.71, 56.435], [-3.937, 56.117], "EDI"], "label": "D7 自驾"},
+        {"mode": "flight", "via": ["EDI", "LHR"], "label": "D10 飞希思罗", "bend": 0}
+      ],
+      "stops": [
+        {"place": "INV", "sub": "取车"}, {"place": "NESS"}, {"place": "EILEAN"},
+        {"place": "PORTREE", "nights": 2, "sub": "D4–5"},
+        {"place": "GLENFINNAN"},
+        {"place": "GLENCOE", "nights": 1, "sub": "D6"},
+        {"place": "EDI", "nights": 3, "sub": "D7–9"}
+      ]
+    },
+    {
+      "id": "D", "title": "南英格兰乡村", "color": "#93600F", "color_dark": "#E4AF5E",
+      "note": "落地提车一路向西，最后在希思罗还车，回伦敦住 4 晚。",
+      "legs": [
+        {"mode": "car", "via": ["LGW", "SEVEN", "LEWES"], "label": "D1"},
+        {"mode": "car", "via": ["LEWES", "STONE", "SALIS", "WAREHAM"], "label": "D2"},
+        {"mode": "car", "via": ["WAREHAM", "DURDLE", "BATH"], "label": "D3"},
+        {"mode": "car", "via": ["BATH", "LACOCK", "BOURTON"], "label": "D5"},
+        {"mode": "car", "via": ["BOURTON", "OXFORD", "LHR"], "label": "D6 还车"},
+        {"mode": "transfer", "via": ["LHR", "LON"]}
+      ],
+      "stops": [
+        {"place": "LGW", "kind": "air", "sub": "D1 提车"}, {"place": "SEVEN"},
+        {"place": "LEWES", "nights": 1, "sub": "D1"}, {"place": "STONE"}, {"place": "SALIS"},
+        {"place": "WAREHAM", "nights": 1, "sub": "D2"}, {"place": "DURDLE"},
+        {"place": "BATH", "nights": 2, "sub": "D3–4"}, {"place": "LACOCK", "sub": "摄影术"},
+        {"place": "BOURTON", "nights": 1, "sub": "D5"}, {"place": "OXFORD"},
+        {"place": "LON", "nights": 4, "sub": "D6–9"}, {"place": "LHR", "nights": 1, "sub": "D10"}
+      ]
+    }
+  ]
+}
