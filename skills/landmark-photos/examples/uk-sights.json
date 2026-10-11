@@ -1,0 +1,37 @@
+{
+  "title": "英国三个方案的代表景点",
+  "subtitle": "示例。伦敦和爱丁堡几个方案共用，放在前两组；照片多是夏天拍的。",
+  "lang": "zh",
+  "groups": [
+    {"id": "伦", "title": "伦敦", "sub": "每个方案都有", "color": "#1A2230", "items": [
+      {"key": "british-museum", "name": "大英博物馆", "note": "免费；圣诞前后和元旦关门", "wiki": "British Museum"},
+      {"key": "westminster", "name": "国会大厦和大本钟", "note": "在威斯敏斯特桥上看", "wiki": "Palace of Westminster"},
+      {"key": "tower", "name": "伦敦塔", "note": "看王冠珠宝", "wiki": "Tower of London"},
+      {"key": "tower-bridge", "name": "塔桥", "note": "冬天 16 点就亮灯", "wiki": "Tower Bridge"}
+    ]},
+    {"id": "爱", "title": "爱丁堡", "sub": "A、C 都有", "color": "#1A2230", "items": [
+      {"key": "edinburgh-castle", "name": "爱丁堡城堡", "wiki": "Edinburgh Castle"},
+      {"key": "royal-mile", "name": "皇家英里大道", "note": "老城主街", "wiki": "Royal Mile"},
+      {"key": "tartan", "name": "第一张彩色照片", "note": "麦克斯韦 1861 年，原版底片在他故居", "file": "Tartan Ribbon.jpg"}
+    ]},
+    {"id": "A", "title": "经典火车线", "sub": "伦敦和爱丁堡之外", "color": "#A3195B", "items": [
+      {"key": "stonehenge", "name": "巨石阵", "note": "约 5000 年前的石圈", "wiki": "Stonehenge"},
+      {"key": "roman-baths", "name": "巴斯罗马浴场", "wiki": "Roman Baths (Bath)"},
+      {"key": "york-minster", "name": "约克大教堂", "wiki": "York Minster"},
+      {"key": "glencoe", "name": "格伦科", "note": "高地一日团", "search": "Three Sisters Glen Coe"}
+    ]},
+    {"id": "C", "title": "苏格兰高地自驾", "sub": "伦敦和爱丁堡之外", "color": "#2B6A8A", "items": [
+      {"key": "eilean-donan", "name": "艾琳多南城堡", "note": "冬天只看外观", "wiki": "Eilean Donan"},
+      {"key": "storr", "name": "老人峰", "note": "往返约 1.5 小时", "wiki": "Old Man of Storr"},
+      {"key": "glenfinnan", "name": "格伦芬南高架桥", "note": "冬天蒸汽车停运，普通火车照样过桥", "wiki": "Glenfinnan Viaduct"},
+      {"key": "glencoe", "name": "格伦科", "search": "Three Sisters Glen Coe"}
+    ]},
+    {"id": "D", "title": "南英格兰乡村", "sub": "伦敦之外", "color": "#93600F", "items": [
+      {"key": "seven-sisters", "name": "七姐妹白崖", "wiki": "Seven Sisters, Sussex"},
+      {"key": "durdle", "name": "杜德尔门", "note": "侏罗纪海岸的海蚀拱门", "wiki": "Durdle Door"},
+      {"key": "lacock", "name": "拉科克修道院", "note": "摄影术诞生地", "wiki": "Lacock Abbey"},
+      {"key": "talbot-window", "name": "塔尔博特 1835 年的底片", "note": "拍的就是修道院那扇窗", "search": "Latticed window Lacock Abbey Talbot 1835"},
+      {"key": "bibury", "name": "拜伯里", "wiki": "Bibury"}
+    ]}
+  ]
+}

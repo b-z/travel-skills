@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""景点代表照片：从 Wikimedia Commons 取免费授权照片，排成按组分类的小图墙，并保留署名。
+
+用法:
+  python3 landmark_photos.py fetch SPEC.json --out DIR [--refresh KEY ...]
+  python3 landmark_photos.py build SPEC.json --out DIR [--embed] [--fragment] [--png] [--pdf]
+
+fetch  下载照片到 DIR/img/<key>.jpg，元数据（作者、许可、来源）写进 DIR/meta.json，
+       并生成 DIR/contact.html（+ contact.png，有 Chrome 时）供人工检查选图。已下载的会跳过。
+build  生成 DIR/gallery.html（图片用相对路径 img/…；--embed 改成内嵌 data URI 的单文件），
+       --fragment 额外输出 gallery.fragment.html + gallery.css，--png 输出 gallery.png，--pdf 输出 gallery.pdf。
+
+只用 Python 标准库；缩图优先用 macOS 的 sips，其次 Pillow，都没有就保留 Commons 的 500px 缩略图原样。
+SPEC 格式见 references/spec.md。
+"""
+import argparse, base64, html, json, math, os, re, shutil, subprocess, sys, tempfile, time
+import urllib.error, urllib.parse, urllib.request
+
+UA = {'User-Agent': 'landmark-photos/1.0 (travel planning gallery)'}
+THUMB_W = 500           # Wikimedia 的标准缩略图宽度之一；非标准宽度更容易被限流（HTTP 429）
+FREE = re.compile(r'(cc[ -]?by|cc0|public domain|pd|gfdl|attribution|no restrictions)', re.I)
+TEXT = {
+    'zh': {'credits': '照片来源（Wikimedia Commons）', 'anon': '佚名', 'png_foot': '照片均来自 Wikimedia Commons，按各自许可使用。'},
+    'en': {'credits': 'Photo credits (Wikimedia Commons)', 'anon': 'Unknown', 'png_foot': 'All photos from Wikimedia Commons under their respective licences.'},
+}
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+def esc(s):
+    return html.escape(str(s if s is not None else ''), quote=True)
+
+
+def get(url):
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == 5:
+                raise
+            wait = int(e.headers.get('Retry-After') or 0) or 10 * (attempt + 1)
+            log(f'  被限流（429），等 {min(wait, 60)} 秒')
+            time.sleep(min(wait, 60))
+
+
+def api(host, params):
+    q = urllib.parse.urlencode({**params, 'format': 'json', 'formatversion': 2})
+    return json.loads(get(f'https://{host}/w/api.php?{q}'))
+
+
+def strip(h, n=90):
+    t = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', h or '')).strip()
+    return t if len(t) <= n else t[:n - 1] + '…'
+
+
+def commons_search(query):
+    r = api('commons.wikimedia.org', {'action': 'query', 'list': 'search', 'srnamespace': 6, 'srsearch': query, 'srlimit': 15})
+    return [h['title'][5:] for h in r['query']['search'] if h['title'].lower().endswith(('.jpg', '.jpeg'))]
+
+
+def lead_image(title, lang):
+    r = api(f'{lang}.wikipedia.org', {'action': 'query', 'titles': title, 'prop': 'pageimages', 'piprop': 'name', 'redirects': 1})
+    pg = r['query']['pages'][0]
+    return pg.get('pageimage'), pg.get('title')
+
+
+def imageinfo(fname):
+    r = api('commons.wikimedia.org', {'action': 'query', 'titles': 'File:' + fname, 'prop': 'imageinfo',
+                                      'iiprop': 'url|extmetadata|size', 'iiurlwidth': THUMB_W})
+    pg = r['query']['pages'][0]
+    if pg.get('missing') or 'imageinfo' not in pg:
+        return None
+    return pg['imageinfo'][0]
+
+
+def resize(src, dst, maxpx=420):
+    if shutil.which('sips'):
+        r = subprocess.run(['sips', '-s', 'format', 'jpeg', '-s', 'formatOptions', '72', '-Z', str(maxpx), src, '--out', dst],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if r.returncode == 0:
+            return
+    try:
+        from PIL import Image  # noqa
+        im = Image.open(src).convert('RGB')
+        im.thumbnail((maxpx, maxpx))
+        im.save(dst, 'JPEG', quality=72)
+        return
+    except Exception:
+        shutil.copyfile(src, dst)
+
+
+def items_of(spec):
+    for g in spec['groups']:
+        for it in g['items']:
+            yield g, it
+
+
+# ---------------- fetch ----------------
+
+def cmd_fetch(spec, out, refresh):
+    lang = spec.get('wiki_lang', 'en')
+    raw, img = os.path.join(out, 'raw'), os.path.join(out, 'img')
+    os.makedirs(raw, exist_ok=True); os.makedirs(img, exist_ok=True)
+    mp = os.path.join(out, 'meta.json')
+    meta = json.load(open(mp)) if os.path.exists(mp) else {}
+    seen = set()
+    for _, it in items_of(spec):
+        key = it['key']
+        if key in seen:
+            continue
+        seen.add(key)
+        if key in meta and key not in refresh and os.path.exists(os.path.join(img, key + '.jpg')):
+            continue
+        try:
+            fname = page = None
+            how = ''
+            if it.get('file'):
+                fname, how = it['file'].removeprefix('File:'), 'file'
+            elif it.get('search'):
+                hits = commons_search(it['search'])
+                if hits:
+                    fname, how = hits[it.get('pick', 0)], f'search "{it["search"]}"'
+            elif it.get('wiki'):
+                fname, page = lead_image(it['wiki'], it.get('wiki_lang', lang))
+                how = f'wiki "{it["wiki"]}"'
+                # 条目首图是地图、徽标、示意图（svg/png/gif）或缺失时，改用 Commons 搜索
+                if not fname or not fname.lower().endswith(('.jpg', '.jpeg')):
+                    hits = commons_search(page or it['wiki'])
+                    fname, how = (hits[0] if hits else None), f'search "{page or it["wiki"]}"（条目首图不是照片）'
+            if not fname:
+                log(f'✗ {key}: 没找到照片，在 SPEC 里给它加 search 或 file'); continue
+            info = imageinfo(fname)
+            if info is None and it.get('wiki'):   # 首图是非自由图片（只在维基百科本地），改搜 Commons
+                hits = commons_search(page or it['wiki'])
+                fname = hits[0] if hits else None
+                info = imageinfo(fname) if fname else None
+                how += '（首图不在 Commons）'
+            if info is None:
+                log(f'✗ {key}: Commons 上找不到 {fname}'); continue
+            em = info.get('extmetadata', {})
+            lic = strip(em.get('LicenseShortName', {}).get('value'), 40)
+            thumb = info.get('thumburl') or info['url']
+            ext = os.path.splitext(urllib.parse.urlparse(thumb).path)[1].lower() or '.jpg'
+            rp = os.path.join(raw, key + ext)
+            open(rp, 'wb').write(get(thumb))
+            resize(rp, os.path.join(img, key + '.jpg'))
+            meta[key] = {'file': fname, 'page': page, 'source_url': info.get('descriptionurl'),
+                         'artist': strip(em.get('Artist', {}).get('value')), 'license': lic,
+                         'license_url': em.get('LicenseUrl', {}).get('value'), 'via': how}
+            flag = '' if FREE.search(lic or '') else '  ⚠ 许可不常见，检查后再用'
+            log(f'✓ {key}: {fname} [{lic}]{flag}')
+            json.dump(meta, open(mp, 'w'), ensure_ascii=False, indent=1)
+        except Exception as e:  # 单个失败不影响其它
+            log(f'✗ {key}: {e}')
+        time.sleep(1.5)
+    json.dump(meta, open(mp, 'w'), ensure_ascii=False, indent=1)
+
+    # 选图检查页
+    cells = ''.join(f'<figure><img src="img/{esc(k)}.jpg"><figcaption><b>{esc(k)}</b><br>{esc(m["file"])}<br>'
+                    f'<i>{esc(m["license"])}</i></figcaption></figure>' for k, m in meta.items() if k in seen)
+    sheet = os.path.join(out, 'contact.html')
+    n = len([k for k in meta if k in seen])
+    open(sheet, 'w', encoding='utf-8').write(
+        '<!doctype html><meta charset="utf-8"><style>body{margin:0;padding:8px;font:11px/1.35 -apple-system,sans-serif;'
+        'display:grid;grid-template-columns:repeat(6,1fr);gap:6px;width:1100px;box-sizing:border-box}figure{margin:0}'
+        'img{width:100%;height:110px;object-fit:cover;display:block}figcaption{height:44px;overflow:hidden;word-break:break-all}'
+        '</style>' + cells)
+    chrome = find_chrome()
+    if chrome:
+        rows = math.ceil(n / 6)
+        run_chrome(chrome, ['--force-device-scale-factor=1', f'--window-size=1100,{rows * 166 + 20}',
+                            f'--screenshot={os.path.join(out, "contact.png")}', '--allow-file-access-from-files'], sheet)
+    missing = [it['key'] for _, it in items_of(spec) if it['key'] not in meta]
+    print(f'已有 {n} 张；检查页 {sheet}' + (f'；缺 {len(set(missing))} 张: {", ".join(sorted(set(missing)))}' if missing else ''))
+
+
+# ---------------- build ----------------
+
+def cmd_build(spec, out, embed, fragment, png, pdf):
+    lang = spec.get('lang', 'zh')
+    T = TEXT.get(lang, TEXT['zh'])
+    meta = json.load(open(os.path.join(out, 'meta.json')))
+
+    def src(key, inline):
+        p = os.path.join(out, 'img', key + '.jpg')
+        if inline:
+            return 'data:image/jpeg;base64,' + base64.b64encode(open(p, 'rb').read()).decode()
+        return f'img/{key}.jpg'
+
+    def grid_html(inline):
+        parts, used = [], []
+        for g in spec['groups']:
+            col = g.get('color', '#1A2230')
+            parts.append(f'<section class="lp-group" style="--gc:{esc(col)}"><div class="lp-head">'
+                         + (f'<span class="lp-badge">{esc(g["id"])}</span>' if g.get('id') else '')
+                         + f'<span class="lp-title">{esc(g.get("title", ""))}</span>'
+                         + (f'<span class="lp-sub">{esc(g["sub"])}</span>' if g.get('sub') else '') + '</div><div class="lp-grid">')
+            for it in g['items']:
+                k = it['key']
+                if k not in meta:
+                    continue
+                if k not in used:
+                    used.append(k)
+                m = meta[k]
+                credit = f'{m["artist"] or T["anon"]} · {m["license"]}'
+                parts.append(f'<figure class="lp-card"><img src="{src(k, inline)}" alt="{esc(it.get("name", k))}" title="{esc(credit)}">'
+                             f'<figcaption><b>{esc(it.get("name", k))}</b>'
+                             + (f'<span>{esc(it["note"])}</span>' if it.get('note') else '') + '</figcaption></figure>')
+            parts.append('</div></section>')
+        cr = ''.join(f'<li>{esc(next(it.get("name", k) for _, it in items_of(spec) if it["key"] == k))}：'
+                     f'<a href="{esc(meta[k]["source_url"])}" target="_blank" rel="noopener">{esc(meta[k]["file"])}</a>，'
+                     f'{esc(meta[k]["artist"] or T["anon"])}，{esc(meta[k]["license"])}</li>' for k in used)
+        parts.append(f'<details class="lp-credits"><summary>{T["credits"]}</summary><ul>{cr}</ul></details>')
+        return '\n'.join(parts), used
+
+    grid, used = grid_html(embed)
+    title = spec.get('title', '')
+    head = (f'<h1>{esc(title)}</h1>' if title else '') + (f'<p class="lp-lead">{esc(spec["subtitle"])}</p>' if spec.get('subtitle') else '')
+    page = PAGE.format(lang='zh-CN' if lang == 'zh' else 'en', theme='', title=esc(title or 'Gallery'), css=CSS, body=head + grid)
+    gp = os.path.join(out, 'gallery.html')
+    open(gp, 'w', encoding='utf-8').write(page)
+    made = [gp]
+    if fragment:
+        open(os.path.join(out, 'gallery.fragment.html'), 'w', encoding='utf-8').write(grid)
+        open(os.path.join(out, 'gallery.css'), 'w', encoding='utf-8').write(CSS)
+        made += [os.path.join(out, 'gallery.fragment.html'), os.path.join(out, 'gallery.css')]
+
+    chrome = find_chrome() if (png or pdf) else None
+    if (png or pdf) and not chrome:
+        log('没找到 Chrome/Chromium，跳过 PNG/PDF。可用环境变量 CHROME 指定路径。')
+    if chrome and pdf:
+        pp = os.path.join(out, 'gallery.pdf')
+        printable = page.replace('<details class="lp-credits">', '<details class="lp-credits" open>').replace('<html lang="zh-CN"', '<html data-theme="light" lang="zh-CN"').replace('<html lang="en"', '<html data-theme="light" lang="en"')
+        tmp = os.path.join(out, '.print.html')
+        open(tmp, 'w', encoding='utf-8').write(printable)
+        run_chrome(chrome, ['--no-pdf-header-footer', '--print-to-pdf-no-header', f'--print-to-pdf={pp}',
+                            '--allow-file-access-from-files'], tmp)
+        os.unlink(tmp)
+        made.append(pp)
+    if chrome and png:
+        # 固定版式，高度可以算准：5 列，卡片 180×(135+66)
+        COLS, CW, IH, CH, GAP, HEAD, GGAP = 5, 180, 135, 66, 12, 30, 22
+        h = 24 + (44 if title else 0) + (26 if spec.get('subtitle') else 0)
+        for g in spec['groups']:
+            n = len([it for it in g['items'] if it['key'] in meta])
+            rows = math.ceil(n / COLS)
+            h += HEAD + 8 + rows * (IH + CH + 2) + max(0, rows - 1) * GAP + GGAP
+        credit_lines = math.ceil(len(used) / 2)
+        h += 22 + credit_lines * 15 + 24
+        cr = ''.join(f'<li>{esc(meta[k]["file"])} — {esc(meta[k]["artist"] or T["anon"])}（{esc(meta[k]["license"])}）</li>' for k in used)
+        body = (head + grid_html(True)[0].rsplit('<details', 1)[0]
+                + f'<div class="lp-pngfoot">{T["png_foot"]}</div><ul class="lp-pngcred">{cr}</ul>')
+        fixed = PAGE.format(lang='zh-CN', theme=' data-theme="light"', title='', css=CSS + PNG_CSS, body=body)
+        tmp = os.path.join(out, '.png.html')
+        open(tmp, 'w', encoding='utf-8').write(fixed)
+        pp = os.path.join(out, 'gallery.png')
+        run_chrome(chrome, ['--force-device-scale-factor=2', f'--window-size={COLS * CW + (COLS - 1) * GAP + 48},{h}',
+                            f'--screenshot={pp}'], tmp)
+        os.unlink(tmp)
+        made.append(pp)
+    print('\n'.join(['生成：'] + made))
+
+
+def find_chrome():
+    for c in [os.environ.get('CHROME'), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+              '/Applications/Chromium.app/Contents/MacOS/Chromium', shutil.which('google-chrome'),
+              shutil.which('google-chrome-stable'), shutil.which('chromium'), shutil.which('chromium-browser')]:
+        if c and os.path.exists(c):
+            return c
+    return None
+
+
+def run_chrome(chrome, extra, page):
+    with tempfile.TemporaryDirectory() as prof:
+        subprocess.run([chrome, '--headless=new', '--disable-gpu', '--hide-scrollbars', f'--user-data-dir={prof}',
+                        '--virtual-time-budget=6000', *extra, 'file://' + os.path.abspath(page)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+
+
+CSS = """
+.lp-group{--ink:#1A2230;--muted:#5A6472;--card:#FFFFFF;--rule:#D9DCD4;--ph:#E8E9E2;display:flex;flex-direction:column;gap:8px;break-inside:avoid-page}
+.lp-credits{--muted:#5A6472}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .lp-group{--ink:#E6E9EE;--muted:#9CA5B1;--card:#181D25;--rule:#2B323D;--ph:#2A313B}
+ :root:not([data-theme="light"]) .lp-credits{--muted:#9CA5B1}}
+:root[data-theme="dark"] .lp-group{--ink:#E6E9EE;--muted:#9CA5B1;--card:#181D25;--rule:#2B323D;--ph:#2A313B}
+:root[data-theme="dark"] .lp-credits{--muted:#9CA5B1}
+.lp-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.lp-badge{align-self:center;flex:none;font-weight:700;font-size:15px;min-width:26px;height:26px;padding:0 6px;border-radius:5px;display:grid;place-items:center;background:var(--gc);color:var(--card)}
+.lp-title{font-weight:600;font-size:16px;color:var(--ink)}
+.lp-sub{font-size:12.5px;color:var(--muted)}
+.lp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.lp-card{margin:0;background:var(--card);border:1px solid var(--rule);border-radius:6px;overflow:hidden;display:flex;flex-direction:column;min-width:0;break-inside:avoid}
+.lp-card img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--ph)}
+.lp-card figcaption{padding:7px 9px 9px;display:flex;flex-direction:column;gap:1px;font-size:13px;line-height:1.45;color:var(--ink)}
+.lp-card figcaption b{font-weight:600}
+.lp-card figcaption span{font-size:12px;color:var(--muted)}
+.lp-credits{font-size:12px;color:var(--muted)}
+.lp-credits summary{cursor:pointer}
+.lp-credits ul{margin:6px 0 0;padding-left:1.2em;display:flex;flex-direction:column;gap:2px;word-break:break-word}
+@media (max-width:640px){.lp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+"""
+
+PNG_CSS = """
+body{background:#fff !important} .lp-wrap{padding:24px !important;gap:0 !important;max-width:none !important;margin:0 !important}
+.lp-wrap h1{height:44px;margin:0;font-size:22px;line-height:44px} .lp-lead{height:26px;margin:0}
+.lp-group{gap:8px;margin-bottom:22px} .lp-head{height:30px;align-items:center;flex-wrap:nowrap}
+.lp-grid{grid-template-columns:repeat(5,180px);gap:12px}
+.lp-card img{width:180px;height:135px;aspect-ratio:auto}
+.lp-card figcaption{height:66px;box-sizing:border-box;overflow:hidden}
+.lp-card figcaption span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lp-pngfoot{height:22px;font-size:12px;color:#5A6472}
+.lp-pngcred{margin:0;padding:0;list-style:none;columns:2;column-gap:24px;font-size:10px;line-height:15px;color:#5A6472}
+.lp-pngcred li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+"""
+
+PAGE = """<!doctype html>
+<html lang="{lang}"{theme}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>
+:root{{color-scheme:light dark}}
+body{{margin:0;background:#F4F5F1;color:#1A2230;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei",sans-serif}}
+@media (prefers-color-scheme:dark){{:root:not([data-theme="light"]) body{{background:#11151B;color:#E6E9EE}}}}
+.lp-wrap{{max-width:940px;margin:0 auto;padding:24px 20px 48px;display:flex;flex-direction:column;gap:22px}}
+h1{{margin:0;font-size:24px}} .lp-lead{{margin:0;color:#5A6472;font-size:14px}}
+@media print{{body{{background:#fff}} @page{{size:A4;margin:10mm}} .lp-grid{{grid-template-columns:repeat(4,1fr) !important}}}}
+{css}
+</style></head><body><div class="lp-wrap">{body}</div></body></html>
+"""
+
+
+def main():
+    ap = argparse.ArgumentParser(description='从 Wikimedia Commons 取景点照片并排成小图墙')
+    ap.add_argument('cmd', choices=['fetch', 'build'])
+    ap.add_argument('spec')
+    ap.add_argument('--out', required=True)
+    ap.add_argument('--refresh', nargs='*', default=[], help='fetch：重新下载这些 key')
+    ap.add_argument('--embed', action='store_true', help='build：图片内嵌为 data URI，得到单个 HTML 文件')
+    ap.add_argument('--fragment', action='store_true')
+    ap.add_argument('--png', action='store_true')
+    ap.add_argument('--pdf', action='store_true')
+    a = ap.parse_args()
+    spec = json.load(open(a.spec, encoding='utf-8'))
+    os.makedirs(a.out, exist_ok=True)
+    if a.cmd == 'fetch':
+        cmd_fetch(spec, a.out, set(a.refresh))
+    else:
+        cmd_build(spec, a.out, a.embed, a.fragment, a.png, a.pdf)
+
+
+if __name__ == '__main__':
+    main()
