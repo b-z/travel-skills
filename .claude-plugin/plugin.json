@@ -1,0 +1,10 @@
+{
+  "name": "travel-skills",
+  "version": "0.1.0",
+  "description": "Turn a trip plan that already exists in the conversation into visuals: schematic route maps on a real coastline base map, and a grouped wall of classic landmark photos with attribution. HTML, PNG, SVG or PDF.",
+  "author": {
+    "name": "b-z"
+  },
+  "license": "MIT",
+  "keywords": ["travel", "itinerary", "map", "photos", "wikimedia"]
+}
