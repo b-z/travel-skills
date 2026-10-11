@@ -1,13 +1,13 @@
 ---
 name: trip-route-map
-description: Draw schematic travel route maps on a real coastline base map — one small map per itinerary option, with overnight stops (number of nights), dates, pass-through sights and transport modes (train, drive, flight, ferry, coach, day trip). Outputs a themed HTML page, an embeddable HTML fragment, per-route PNG/SVG, or a PDF. Use this whenever a trip plan or several route options already exist in the conversation and the user wants to see them on a map — "画一下路线图", "把这几个方案画在地图上", "行程示意图", "show the routes on a map", "trip map PDF" — even if they don't say "skill". Planning the itinerary itself is out of scope; this skill only visualises a plan that is already there.
+description: Draw schematic travel route maps on a real base map — country/region scale on Natural Earth coastlines, city scale (walking days, metro, river boats) on OpenStreetMap streets, rivers and parks — one small map per itinerary option or per day, with overnight stops (number of nights), dates, pass-through sights and transport modes (train, metro, drive, flight, ferry, coach, walk, day trip). Outputs a themed HTML page, an embeddable HTML fragment, per-route PNG/SVG, or a PDF. Use this whenever a trip plan or several route options already exist in the conversation and the user wants to see them on a map — "画一下路线图", "把这几个方案画在地图上", "行程示意图", "伦敦每天怎么走画个图", "show the routes on a map", "trip map PDF" — even if they don't say "skill". Planning the itinerary itself is out of scope; this skill only visualises a plan that is already there.
 license: MIT
-compatibility: python3 (standard library only); network on first run to download the Natural Earth base map; Google Chrome or Chromium for PNG/PDF.
+compatibility: python3 (standard library only); network on first run (Natural Earth base map; OpenStreetMap Overpass API for city maps); Google Chrome or Chromium for PNG/PDF.
 ---
 
 # 行程路线示意图
 
-把会话里已经有的行程方案画成"路线示意图"：底图是 Natural Earth 1:10m 的真实海岸线和国界，每个方案一张小图，圆点里写住几晚、旁边写日期，线型区分火车、自驾、航班等。线路是途经点之间的直线，表达"去哪、怎么走、住几晚"，不是导航路线。
+把会话里已经有的行程方案画成"路线示意图"：国家、地区尺度的底图是 Natural Earth 1:10m 的海岸线和国界；城市尺度（一天的步行、地铁、游船路线）自动换成 OpenStreetMap 的街道、河流、公园和铁路。每个方案（或每一天）一张小图，圆点里写住几晚、旁边写日期，线型区分火车、自驾、航班等。线路是途经点之间的直线，表达"去哪、怎么走、住几晚"，不是导航路线。
 
 制定计划不在这个技能里。如果会话里还没有方案，先和用户把方案定下来，再回到这里。
 
@@ -39,6 +39,16 @@ compatibility: python3 (standard library only); network on first run to download
    - 用户要图片或 PDF：给 PNG / PDF 文件路径，或者用文件发送工具发过去。
    - 放进 Artifact 网页：用 `--fragment`，把 `maps.css` 放进页面的 `<style>`，把 `maps.fragment.html` 原样插进页面。片段里所有样式和底图都是内联的，不依赖外部资源，符合 Artifact 的 CSP。片段里的 SVG `id` 是 `trm-focus` / `trm-other`，同一页面只插一次片段。
    - 独立网页：`maps.html` 自带浅色/深色主题，可以直接打开或分享。
+
+## 城市级路线
+
+所有地图都窄于 80 km 时（例如伦敦市内每天一张），脚本自动改用 OpenStreetMap 底图，也可以在顶层写 `"base": "city"` / `"base": "world"` 强制指定。示例：`examples/london-days.json`。
+
+- 地点坐标要准到几十米：城市里两个景点常常只隔两三百米，凭印象写的坐标会把圆点放到河对岸。拿不准就用 `wiki`。
+- 步行用 `walk`，地铁用 `metro`，城市游船用 `ferry`，打车用 `transfer`。游船、步行沿河走时，在 `via` 里加几个河道上的匿名点，线才会沿着河弯。
+- 住处只有一个、每天都从那里出发时，每张图都把它放进 stops（写同样的 `nights`），读者一眼知道起点。
+- 底图数据通过 Overpass API 下载，按范围缓存在 `~/.cache/trip-route-map/osm_*.json`；伦敦市中心约 10 km 见方要下载几十 MB、半分钟左右。范围超过 150 km 会拒绝，改成国家尺度的图。
+- OpenStreetMap 的数据要求署名，脚本已经把"© OpenStreetMap contributors"写进图例和每张 PNG 的右下角，交付时不要去掉。
 
 ## 设计取舍（为什么这样做）
 

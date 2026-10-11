@@ -1,6 +1,6 @@
 # route_map.py 的 SPEC 格式
 
-一个 JSON 文件。完整示例：`examples/uk-three-routes.json`。
+一个 JSON 文件。完整示例：`examples/uk-three-routes.json`（国家尺度）、`examples/london-days.json`（城市尺度）。
 
 ## 顶层
 
@@ -11,6 +11,7 @@
 | `lang` | | 图例语言，`zh`（默认）或 `en` |
 | `wiki_lang` | | 用 `wiki` 查坐标时的维基语言，默认 `en` |
 | `aspect` | | 每张图的宽高比，默认 `"auto"`；也可以写数字，如 `0.8`（4:5 竖版）、`1.5`（3:2 横版） |
+| `base` | | 底图：`"auto"`（默认，所有图都窄于 80 km 时用城市底图）、`"world"`（Natural Earth）、`"city"`（OpenStreetMap 街道、河流、公园、铁路） |
 | `text_scale` | | 文字和圆点的缩放，默认 `"auto"`（放不下时依次试 1、0.85、0.72、0.6）；写数字则固定 |
 | `places` | 是 | 地点表，键是你自己起的短名 |
 | `routes` | 是 | 方案列表，每个方案画一张图 |
@@ -49,7 +50,7 @@
 
 | 字段 | 说明 |
 |---|---|
-| `mode` | `train` 实线、`car` 空心双线、`flight` 虚线弧、`ferry` 点划线、`bus` 短虚线（大巴、跟团）、`day` 圆点线（一日游）、`walk` 细点线、`transfer` 细实线（接送车、机场线） |
+| `mode` | `train` 实线、`metro` 长虚线（地铁）、`car` 空心双线、`flight` 虚线弧、`ferry` 点划线、`bus` 短虚线（大巴、跟团）、`day` 圆点线（一日游）、`walk` 细点线、`transfer` 细实线（接送车、机场线） |
 | `via` | 途经点：`places` 的键，或匿名坐标 `[lon, lat]`（不画圆点） |
 | `label` | 路段上的小字，通常写日期 |
 | `label_at` | 标签位置：0–1 的比例（沿路段的长度），或某个地点键；不写时在中点，路段中点在图外时自动挪到图内 |

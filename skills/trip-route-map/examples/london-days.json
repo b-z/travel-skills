@@ -1,0 +1,79 @@
+{
+  "title": "伦敦四天：城市级路线示例",
+  "subtitle": "示例。每天一张图；住处以国王十字为例。底图来自 OpenStreetMap。",
+  "lang": "zh",
+  "places": {
+    "KX": {"name": "住处", "lonlat": [-0.1240, 51.5308]},
+    "ABBEY": {"name": "威斯敏斯特教堂", "lonlat": [-0.1273, 51.4993]},
+    "BIGBEN": {"name": "大本钟", "lonlat": [-0.1246, 51.5007]},
+    "PALACE": {"name": "白金汉宫", "lonlat": [-0.1419, 51.5014]},
+    "TRAF": {"name": "特拉法加广场", "lonlat": [-0.1281, 51.5080]},
+    "CHINA": {"name": "唐人街", "lonlat": [-0.1312, 51.5115]},
+    "EYE": {"name": "伦敦眼", "lonlat": [-0.1196, 51.5033]},
+    "WPIER": {"name": "威斯敏斯特码头", "lonlat": [-0.1229, 51.5017]},
+    "CUTTY": {"name": "卡蒂萨克号", "lonlat": [-0.0096, 51.4828]},
+    "OBS": {"name": "格林尼治天文台", "lonlat": [-0.0015, 51.4769]},
+    "LBPIER": {"name": "伦敦桥码头", "lonlat": [-0.0857, 51.5064]},
+    "BM": {"name": "大英博物馆", "lonlat": [-0.1270, 51.5194]},
+    "COVENT": {"name": "考文特花园", "lonlat": [-0.1225, 51.5117]},
+    "NG": {"name": "国家美术馆", "lonlat": [-0.1284, 51.5089]},
+    "TOWER": {"name": "伦敦塔", "lonlat": [-0.0759, 51.5081]},
+    "TBRIDGE": {"name": "塔桥", "lonlat": [-0.0754, 51.5055]},
+    "BOROUGH": {"name": "博罗市场", "lonlat": [-0.0910, 51.5055]},
+    "TATE": {"name": "泰特现代", "lonlat": [-0.0993, 51.5076]},
+    "STPAULS": {"name": "圣保罗大教堂", "lonlat": [-0.0984, 51.5138]},
+    "SKY": {"name": "Sky Garden", "lonlat": [-0.0835, 51.5113]}
+  },
+  "routes": [
+    {
+      "id": "D1", "title": "圣诞日：空城散步",
+      "note": "地铁停运，打车到威斯敏斯特，之后全程步行。",
+      "legs": [
+        {"mode": "transfer", "via": ["KX", "BIGBEN"]},
+        {"mode": "walk", "via": ["BIGBEN", "ABBEY", [-0.1335, 51.5025], "PALACE", [-0.1330, 51.5055], "TRAF", "CHINA"]}
+      ],
+      "stops": [
+        {"place": "KX", "nights": 5, "sub": "D1–5"},
+        {"place": "BIGBEN"}, {"place": "ABBEY"}, {"place": "PALACE"}, {"place": "TRAF"}, {"place": "CHINA", "sub": "晚饭"}
+      ]
+    },
+    {
+      "id": "D2", "title": "节礼日：坐船去格林尼治",
+      "note": "泰晤士河游船往返，回程在伦敦桥下船，沿南岸走回伦敦眼。",
+      "legs": [
+        {"mode": "metro", "via": ["KX", "WPIER"]},
+        {"mode": "ferry", "via": ["WPIER", [-0.1180, 51.5080], [-0.1050, 51.5095], "LBPIER", [-0.0750, 51.5050], [-0.0560, 51.5040], [-0.0360, 51.5085], [-0.0290, 51.5000], [-0.0250, 51.4880], "CUTTY"], "label": "游船"},
+        {"mode": "walk", "via": ["CUTTY", "OBS"]},
+        {"mode": "ferry", "via": ["CUTTY", [-0.0250, 51.4880], [-0.0290, 51.5000], [-0.0360, 51.5085], [-0.0560, 51.5040], [-0.0750, 51.5050], "LBPIER"], "optional": true},
+        {"mode": "walk", "via": ["LBPIER", "TATE", [-0.1090, 51.5070], "EYE"]}
+      ],
+      "stops": [
+        {"place": "KX", "nights": 5}, {"place": "WPIER"}, {"place": "CUTTY"}, {"place": "OBS"},
+        {"place": "LBPIER"}, {"place": "TATE"}, {"place": "EYE"}
+      ]
+    },
+    {
+      "id": "D3", "title": "博物馆日",
+      "note": "大英博物馆上午人少；下午国家美术馆，傍晚考文特花园。",
+      "legs": [
+        {"mode": "walk", "via": ["KX", "BM"]},
+        {"mode": "walk", "via": ["BM", "COVENT", "NG", "TRAF"]}
+      ],
+      "stops": [
+        {"place": "KX", "nights": 5}, {"place": "BM"}, {"place": "COVENT"}, {"place": "NG"}, {"place": "TRAF"}
+      ]
+    },
+    {
+      "id": "D4", "title": "伦敦塔到圣保罗",
+      "note": "过塔桥到南岸，经博罗市场、泰特现代，走千禧桥回北岸；Sky Garden 免费但要预约。",
+      "legs": [
+        {"mode": "metro", "via": ["KX", "TOWER"]},
+        {"mode": "walk", "via": ["TOWER", "TBRIDGE", [-0.0790, 51.5040], "BOROUGH", "TATE", [-0.0985, 51.5095], "STPAULS", "SKY"]}
+      ],
+      "stops": [
+        {"place": "KX", "nights": 5}, {"place": "TOWER"}, {"place": "TBRIDGE"}, {"place": "BOROUGH"},
+        {"place": "TATE"}, {"place": "STPAULS"}, {"place": "SKY", "sub": "夜景"}
+      ]
+    }
+  ]
+}

@@ -22,14 +22,18 @@ WORLD_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-{res}.json
 UA = {'User-Agent': 'trip-route-map/1.0 (travel route sketch)'}
 PALETTE = [('#A3195B', '#E46CA6'), ('#46703A', '#95C480'), ('#2B6A8A', '#7DB8D7'), ('#93600F', '#E4AF5E'),
            ('#5A4F8F', '#B2A8E3'), ('#B4462B', '#F08A6C'), ('#2F7F78', '#6FC7BE')]
-MODES = ('train', 'car', 'flight', 'ferry', 'bus', 'day', 'walk', 'transfer')
+MODES = ('train', 'metro', 'car', 'flight', 'ferry', 'bus', 'day', 'walk', 'transfer')
+OVERPASS = 'https://overpass-api.de/api/interpreter'
+CITY_MAX_KM = 80   # base=auto 时，所有地图都窄于这个宽度就用城市底图
 TEXT = {
-    'zh': {'legend': '图例', 'train': '火车', 'car': '自驾', 'flight': '航班', 'ferry': '渡轮', 'bus': '大巴 / 跟团',
+    'zh': {'legend': '图例', 'train': '火车', 'metro': '地铁', 'car': '自驾', 'flight': '航班', 'ferry': '渡轮', 'bus': '大巴 / 跟团',
            'day': '一日游（往返）', 'walk': '步行', 'transfer': '接送车 / 机场线', 'night': '住几晚', 'pass': '途经点',
-           'air': '机场', 'foot': '线路是示意，按途经点连直线，不是实际道路。底图：Natural Earth 1:10m。'},
-    'en': {'legend': 'Legend', 'train': 'Train', 'car': 'Drive', 'flight': 'Flight', 'ferry': 'Ferry', 'bus': 'Coach / tour',
+           'air': '机场', 'foot': '线路是示意，按途经点连直线，不是实际道路。底图：Natural Earth 1:10m。',
+           'foot_city': '线路是示意，按途经点连直线，不是实际道路。底图：© OpenStreetMap 贡献者（ODbL），Natural Earth。'},
+    'en': {'legend': 'Legend', 'train': 'Train', 'metro': 'Metro', 'car': 'Drive', 'flight': 'Flight', 'ferry': 'Ferry', 'bus': 'Coach / tour',
            'day': 'Day trip (return)', 'walk': 'Walk', 'transfer': 'Transfer', 'night': 'Nights', 'pass': 'Stop',
-           'air': 'Airport', 'foot': 'Schematic: straight lines between waypoints, not actual roads. Base map: Natural Earth 1:10m.'},
+           'air': 'Airport', 'foot': 'Schematic: straight lines between waypoints, not actual roads. Base map: Natural Earth 1:10m.',
+           'foot_city': 'Schematic: straight lines between waypoints, not actual roads. Base map: © OpenStreetMap contributors (ODbL), Natural Earth.'},
 }
 RENDER_W = 420.0  # 估算标注尺寸时假定的地图显示宽度（CSS 像素）
 TEXT_SCALES = [1.0, 0.85, 0.72, 0.6]  # text_scale=auto 时依次尝试
@@ -85,20 +89,143 @@ def geocode_wiki(title, lang, cache):
     return db[key]
 
 
+def fetch_osm(bbox, cache):
+    """用 Overpass 取城市底图要素（水面、公园、主要道路、铁路），按范围缓存。bbox = [W, S, E, N]。"""
+    key = '_'.join(f'{v:.3f}' for v in bbox)
+    path = os.path.join(cache, f'osm_{key}.json')
+    if os.path.exists(path):
+        return json.load(open(path))
+    b = f'{bbox[1]:.5f},{bbox[0]:.5f},{bbox[3]:.5f},{bbox[2]:.5f}'
+    q = f"""[out:json][timeout:120];
+(
+  way["natural"="water"]({b}); relation["natural"="water"]({b});
+  way["waterway"="riverbank"]({b}); relation["waterway"="riverbank"]({b});
+  way["leisure"~"^(park|garden|nature_reserve)$"]({b}); relation["leisure"~"^(park|nature_reserve)$"]({b});
+  way["landuse"~"^(forest|grass|recreation_ground|cemetery|meadow)$"]({b});
+  way["natural"="wood"]({b});
+  way["highway"~"^(motorway|trunk|primary|secondary)$"]({b});
+  way["railway"="rail"]["service"!~"."]({b});
+);
+out geom;"""
+    log('下载 OpenStreetMap 城市底图 …')
+    data = None
+    for i in range(4):
+        try:
+            req = urllib.request.Request(OVERPASS, data=urllib.parse.urlencode({'data': q}).encode(), headers=UA)
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = json.loads(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 504) or i == 3:
+                raise
+            time.sleep(15 * (i + 1))
+    json.dump(data, open(path, 'w'))
+    return data
+
+
+def join_rings(pieces):
+    """把多段线首尾相接拼成闭合环（OSM 多边形关系的成员是零散的线段）。"""
+    pieces = [list(p) for p in pieces if len(p) >= 2]
+    rings = []
+    while pieces:
+        cur = pieces.pop()
+        changed = True
+        while cur[0] != cur[-1] and changed:
+            changed = False
+            for i, p in enumerate(pieces):
+                if p[0] == cur[-1]:
+                    cur += p[1:]
+                elif p[-1] == cur[-1]:
+                    cur += p[::-1][1:]
+                elif p[-1] == cur[0]:
+                    cur = p[:-1] + cur
+                elif p[0] == cur[0]:
+                    cur = p[::-1][:-1] + cur
+                else:
+                    continue
+                pieces.pop(i)
+                changed = True
+                break
+        rings.append(cur)
+    return rings
+
+
+def osm_layers(data, bbox, proj, tol):
+    """把 Overpass 结果分层、投影、简化，返回 {层名: SVG path d}。"""
+    layers = {k: [] for k in ('water', 'park', 'road1', 'road2', 'road3', 'rail')}
+    min_area = (tol * 12) ** 2
+    ll = lambda geom: [(round(g['lon'], 7), round(g['lat'], 7)) for g in geom]
+
+    def signed(pts):
+        return sum(pts[i - 1][0] * pts[i][1] - pts[i][0] * pts[i - 1][1] for i in range(len(pts))) / 2
+
+    def add_poly(layer, rings, n_outer=None):
+        # 用 nonzero 填充：外环和内环方向相反，这样不同要素互相重叠时不会像 evenodd 那样抵消出空洞
+        parts = []
+        n_outer = len(rings) if n_outer is None else n_outer
+        for i, ring in enumerate(rings):
+            cr = clip_rect(ring, bbox[0], bbox[2], bbox[1], bbox[3])
+            if len(cr) < 4:
+                continue
+            pr = [proj(*q) for q in cr]
+            if area(pr) < min_area:
+                continue
+            sp = simplify(pr, tol * 0.5)
+            if len(sp) < 5 or area(sp) < min_area:
+                continue
+            if (signed(sp) > 0) != (i < n_outer):
+                sp = sp[::-1]
+            parts.append(ring_path(sp))
+        if parts:
+            layers[layer].append(''.join(parts))
+
+    def add_line(layer, pts):
+        pr = simplify([proj(*q) for q in pts], tol)
+        if len(pr) >= 2:
+            layers[layer].append('M' + 'L'.join(f'{x:.3f} {y:.3f}' for x, y in pr))
+
+    for el in data.get('elements', []):
+        t = el.get('tags', {})
+        if t.get('natural') == 'water' or t.get('waterway') == 'riverbank':
+            layer = 'water'
+        elif t.get('leisure') or t.get('landuse') or t.get('natural') == 'wood':
+            layer = 'park'
+        elif t.get('highway'):
+            layer = {'motorway': 'road1', 'trunk': 'road1', 'primary': 'road2'}.get(t['highway'], 'road3')
+        elif t.get('railway'):
+            layer = 'rail'
+        else:
+            continue
+        if el['type'] == 'way' and 'geometry' in el:
+            pts = ll(el['geometry'])
+            if layer in ('water', 'park'):
+                if len(pts) >= 4 and pts[0] == pts[-1]:
+                    add_poly(layer, [pts])
+            else:
+                add_line(layer, pts)
+        elif el['type'] == 'relation' and layer in ('water', 'park'):
+            outer = [ll(m['geometry']) for m in el.get('members', []) if m.get('geometry') and m.get('role') != 'inner']
+            inner = [ll(m['geometry']) for m in el.get('members', []) if m.get('geometry') and m.get('role') == 'inner']
+            outer_r = join_rings(outer)
+            add_poly(layer, outer_r + join_rings(inner), len(outer_r))
+    return {k: ''.join(v) for k, v in layers.items()}
+
+
 # ---------------- 投影：球面横轴墨卡托，单位 km ----------------
 
 class TM:
     R = 6371.0
 
-    def __init__(self, lon0, lat0):
+    def __init__(self, lon0, lat0, unit=1.0):
         self.l0, self.p0 = math.radians(lon0), math.radians(lat0)
+        self.u = unit   # 输出单位：1 = km；城市尺度用 1000（米），SVG 坐标保留 1 位小数就够精确
 
     def __call__(self, lon, lat):
         l, p = math.radians(lon) - self.l0, math.radians(lat)
         b = max(-0.999999, min(0.999999, math.cos(p) * math.sin(l)))
         x = 0.5 * self.R * math.log((1 + b) / (1 - b))
         y = self.R * (math.atan2(math.tan(p), math.cos(l)) - self.p0)
-        return (x, -y)
+        return (x * self.u, -y * self.u)
 
 
 # ---------------- 几何工具 ----------------
@@ -251,7 +378,7 @@ def main():
     def lonlat_box(pts, pad=0.16):
         lons = [p[0] for p in pts]; lats = [p[1] for p in pts]
         w, h = max(lons) - min(lons), max(lats) - min(lats)
-        w, h = max(w, 0.3), max(h, 0.2)
+        w, h = max(w, 0.02), max(h, 0.015)
         return [min(lons) - w * pad, min(lats) - h * pad, max(lons) + w * pad, max(lats) + h * pad]
 
     all_pts = [p for r in routes for p in route_points(r)]
@@ -267,7 +394,9 @@ def main():
         bb = r['_box']
         union = [min(union[0], bb[0]), min(union[1], bb[1]), max(union[2], bb[2]), max(union[3], bb[3])]
 
-    proj = TM((union[0] + union[2]) / 2, (union[1] + union[3]) / 2)
+    est_km = max((union[2] - union[0]) * 111.2 * math.cos(math.radians((union[1] + union[3]) / 2)), (union[3] - union[1]) * 111.2)
+    UNIT = 1000.0 if est_km < 200 else 1.0
+    proj = TM((union[0] + union[2]) / 2, (union[1] + union[3]) / 2, UNIT)
 
     def natural(box):
         a, b = proj(box[0], (box[1] + box[3]) / 2), proj(box[2], (box[1] + box[3]) / 2)
@@ -299,10 +428,10 @@ def main():
     # 底图
     min_w = min(r['_vb'][2] for r in routes)
     max_w = max(r['_vb'][2] for r in routes)
-    res = '50m' if min_w > 2500 else '10m'
+    res = '50m' if min_w / UNIT > 2500 else '10m'
     topo = load_world(args.cache, res)
     arcs = decode_arcs(topo)
-    tol = max(0.08, min_w / 1100)
+    tol = max(0.08 * UNIT, min_w / 1100)
     uw, uh = union[2] - union[0], union[3] - union[1]
     cx0, cx1 = union[0] - uw * 0.6 - 1, union[2] + uw * 0.6 + 1
     cy0, cy1 = max(-85, union[1] - uh * 0.6 - 1), min(85, union[3] + uh * 0.6 + 1)
@@ -330,6 +459,29 @@ def main():
                 if len(s) >= 4:
                     (focus_p if is_focus else other_p).append(ring_path(s))
     focus_d, other_d = ''.join(focus_p), ''.join(other_p)
+
+    base = spec.get('base', 'auto')
+    city = base == 'city' or (base == 'auto' and max_w / UNIT < CITY_MAX_KM)
+    city_defs = ''
+    if city:
+        if max_w / UNIT > 150:
+            raise SystemExit('城市底图只适合 150 km 以内的范围；请拆成多张图，或设 "base": "world"')
+        # 查询范围 = 各张图视窗的经纬度外包（城市尺度下用局部近似反算就够），再留 3% 边
+        lat0 = (union[1] + union[3]) / 2
+        lon0 = (union[0] + union[2]) / 2
+        cos0 = math.cos(math.radians(lat0))
+        cs = []
+        for x0_, y0_, w_, h_ in (r['_vb'] for r in routes):
+            for xx, yy in ((x0_, y0_), (x0_ + w_, y0_ + h_)):
+                cs.append((lon0 + xx / UNIT / (111.2 * cos0), lat0 - yy / UNIT / 111.2))
+        lo = [c[0] for c in cs]; la = [c[1] for c in cs]
+        mx, my = (max(lo) - min(lo)) * 0.03, (max(la) - min(la)) * 0.03
+        qb = [round(min(lo) - mx, 3), round(min(la) - my, 3), round(max(lo) + mx, 3), round(max(la) + my, 3)]
+        layers = osm_layers(fetch_osm(qb, args.cache), qb, proj, max(0.004 * UNIT, min_w / 1000))
+        city_defs = ''.join(f'<path id="trm-{k}" vector-effect="non-scaling-stroke" d="{d}"/>' for k, d in layers.items() if d)
+    CITY_USE = ('<use href="#trm-park" class="park"/><use href="#trm-water" class="water-osm"/>'
+                '<use href="#trm-rail" class="rail"/><use href="#trm-road3" class="road3"/>'
+                '<use href="#trm-road2" class="road2"/><use href="#trm-road1" class="road1"/>') if city else ''
 
     # ---------- 每条路线画一张图 ----------
     used_modes, used_kinds = set(), set()
@@ -530,13 +682,13 @@ def main():
         svgs[rid] = (f'<svg class="rmap" viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}" role="img" '
                      f'aria-label="{esc(r.get("title", rid))}">'
                      f'<rect class="water" x="{x0:.1f}" y="{y0:.1f}" width="{w:.1f}" height="{h:.1f}"/>'
-                     f'<use href="#trm-other" class="land-o"/><use href="#trm-focus" class="land"/>' + ''.join(body) + '</svg>')
+                     f'<use href="#trm-other" class="land-o"/><use href="#trm-focus" class="land"/>' + CITY_USE + ''.join(body) + '</svg>')
 
     # ---------- 组装 ----------
     css = CSS.replace('__ASPECT__', f'{aspect:.4f}')
     defs = (f'<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>'
             f'<path id="trm-focus" vector-effect="non-scaling-stroke" d="{focus_d}"/>'
-            f'<path id="trm-other" vector-effect="non-scaling-stroke" d="{other_d}"/></defs></svg>')
+            f'<path id="trm-other" vector-effect="non-scaling-stroke" d="{other_d}"/>{city_defs}</defs></svg>')
     cards = []
     for ri, r in enumerate(routes):
         rid = str(r.get('id', ri + 1))
@@ -562,7 +714,7 @@ def main():
     if 'pass' in used_kinds:
         li.append(f'<li><svg viewBox="0 0 44 12" aria-hidden="true"><circle class="lg-pass" cx="22" cy="6" r="3.5"/></svg>{T["pass"]}</li>')
     legend = (f'<div class="trm-card trm-legend"><div class="trm-lgt">{T["legend"]}</div><ul class="trm-lg">{"".join(li)}</ul>'
-              f'<p class="trm-note">{T["foot"]}</p></div>')
+              f'<p class="trm-note">{T["foot_city" if city else "foot"]}</p></div>')
     grid = defs + '<div class="trm-grid">' + ''.join(cards) + legend + '</div>'
 
     title = spec.get('title', '')
@@ -587,15 +739,18 @@ def main():
             x0, y0, w, h = r['_vb']
             k = w / RENDER_W * r['_ts']
             inner = svgs[rid].split('>', 1)[1].rsplit('</svg>', 1)[0]
-            ttl = (f'<g class="ttl"><rect x="{x0 + 8 * k:.1f}" y="{y0 + 8 * k:.1f}" width="{20 * k:.1f}" height="{20 * k:.1f}" '
-                   f'rx="{3 * k:.1f}" fill="{light}"/><text x="{x0 + 18 * k:.1f}" y="{y0 + 18.5 * k:.1f}" text-anchor="middle" '
+            bw = max(20, text_w(rid, 12) + 10)
+            ttl = (f'<g class="ttl"><rect x="{x0 + 8 * k:.1f}" y="{y0 + 8 * k:.1f}" width="{bw * k:.1f}" height="{20 * k:.1f}" '
+                   f'rx="{3 * k:.1f}" fill="{light}"/><text x="{x0 + (8 + bw / 2) * k:.1f}" y="{y0 + 18.5 * k:.1f}" text-anchor="middle" '
                    f'dominant-baseline="central" font-size="{12 * k:.2f}" class="ttl-id">{esc(rid)}</text>'
-                   f'<text x="{x0 + 34 * k:.1f}" y="{y0 + 18.5 * k:.1f}" dominant-baseline="central" font-size="{13 * k:.2f}" '
+                   f'<text x="{x0 + (bw + 14) * k:.1f}" y="{y0 + 18.5 * k:.1f}" dominant-baseline="central" font-size="{13 * k:.2f}" '
                    f'class="ttl-t" stroke-width="{3.5 * k:.2f}">{esc(r.get("title", ""))}</text></g>')
             svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}" '
                    f'width="{RENDER_W / r["_ts"]:.0f}" height="{RENDER_W / r["_ts"] / aspect:.0f}" style="--rc:{light}">'
                    f'<style>{SVG_CSS}</style><defs><path id="trm-focus" vector-effect="non-scaling-stroke" d="{focus_d}"/>'
-                   f'<path id="trm-other" vector-effect="non-scaling-stroke" d="{other_d}"/></defs>{inner}{ttl}</svg>')
+                   f'<path id="trm-other" vector-effect="non-scaling-stroke" d="{other_d}"/>{city_defs}</defs>{inner}{ttl}'
+                   + (f'<text x="{x0 + w - 6 * k:.2f}" y="{y0 + h - 6 * k:.2f}" text-anchor="end" font-size="{9 * k:.2f}" '
+                      f'class="osm-attr" stroke-width="{3 * k:.2f}">© OpenStreetMap contributors</text>' if city else '') + '</svg>')
             p = os.path.join(args.out, f'map-{rid}.svg')
             open(p, 'w', encoding='utf-8').write(svg)
             standalone[rid] = (p, RENDER_W / r['_ts'], RENDER_W / r['_ts'] / aspect)
@@ -647,11 +802,11 @@ def run_chrome(chrome, extra, page):
 
 
 CSS = """
-.trm-grid{--land:#E8E9E2;--land-o:#F1F1EC;--water:#D9E6EC;--coast:#B4BAB0;--ink:#1A2230;--muted:#5A6472;--card:#FFFFFF;--rule:#D9DCD4;
+.trm-grid{--land:#E8E9E2;--land-o:#F1F1EC;--water:#D9E6EC;--coast:#B4BAB0;--park:#D8E5CF;--road:#FFFFFF;--road-c:#CFD2CB;--rail:#A9AEA8;--ink:#1A2230;--muted:#5A6472;--card:#FFFFFF;--rule:#D9DCD4;
   display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .trm-grid{--land:#2A313B;--land-o:#1D2229;--water:#141A21;--coast:#3E4753;--ink:#E6E9EE;--muted:#9CA5B1;--card:#181D25;--rule:#2B323D}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .trm-grid{--land:#2A313B;--land-o:#1D2229;--water:#141A21;--coast:#3E4753;--park:#26352A;--road:#3E4652;--road-c:#323944;--rail:#58606B;--ink:#E6E9EE;--muted:#9CA5B1;--card:#181D25;--rule:#2B323D}
   :root:not([data-theme="light"]) .trm-card{--rc:var(--rc-d)}}
-:root[data-theme="dark"] .trm-grid{--land:#2A313B;--land-o:#1D2229;--water:#141A21;--coast:#3E4753;--ink:#E6E9EE;--muted:#9CA5B1;--card:#181D25;--rule:#2B323D}
+:root[data-theme="dark"] .trm-grid{--land:#2A313B;--land-o:#1D2229;--water:#141A21;--coast:#3E4753;--park:#26352A;--road:#3E4652;--road-c:#323944;--rail:#58606B;--ink:#E6E9EE;--muted:#9CA5B1;--card:#181D25;--rule:#2B323D}
 :root[data-theme="dark"] .trm-card{--rc:var(--rc-d)}
 .trm-card{--rc:var(--rc-l,#1A2230);margin:0;background:var(--card);border:1px solid var(--rule);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0;break-inside:avoid}
 .trm-card.rec{border:2px solid var(--rc)}
@@ -663,6 +818,11 @@ CSS = """
 .rmap .water{fill:var(--water)}
 .rmap .land{fill:var(--land);stroke:var(--coast);stroke-width:.7px}
 .rmap .land-o{fill:var(--land-o);stroke:var(--coast);stroke-width:.5px}
+.rmap .park{fill:var(--park)}
+.rmap .water-osm{fill:var(--water)}
+.rmap .road1,.rmap .road2,.rmap .road3,.rmap .rail{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.rmap .road1{stroke:var(--road);stroke-width:2.4px}.rmap .road2{stroke:var(--road);stroke-width:1.6px}.rmap .road3{stroke:var(--road);stroke-width:1px}
+.rmap .rail{stroke:var(--rail);stroke-width:.9px;stroke-dasharray:3 2}
 .rmap .leg{fill:none;stroke:var(--rc);vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}
 .rmap .leg.train{stroke-width:2.6px}
 .rmap .leg.car-o{stroke-width:5.5px}
@@ -673,6 +833,7 @@ CSS = """
 .rmap .leg.day{stroke-width:2.2px;stroke-dasharray:.1 4.5}
 .rmap .leg.walk{stroke-width:1.6px;stroke-dasharray:.1 3}
 .rmap .leg.transfer{stroke-width:1.4px}
+.rmap .leg.metro{stroke-width:2.2px;stroke-dasharray:10 2.5}
 .rmap .leg.optional{opacity:.5}
 .rmap .night{fill:var(--rc);stroke:var(--card);stroke-width:1.5px;vector-effect:non-scaling-stroke}
 .rmap .nights{fill:var(--card);font-weight:700}
@@ -691,20 +852,27 @@ CSS = """
 .trm-lg .train{stroke-width:2.6}.trm-lg .car-o{stroke-width:5.5}.trm-lg .car-i{stroke:var(--card);stroke-width:1.8}
 .trm-lg .flight{stroke-width:2;stroke-dasharray:6 4}.trm-lg .ferry{stroke-width:2;stroke-dasharray:9 3 2 3}
 .trm-lg .bus{stroke-width:2;stroke-dasharray:2 2}.trm-lg .day{stroke-width:2.2;stroke-dasharray:.1 4.5}
-.trm-lg .walk{stroke-width:1.6;stroke-dasharray:.1 3}.trm-lg .transfer{stroke-width:1.4}
+.trm-lg .walk{stroke-width:1.6;stroke-dasharray:.1 3}.trm-lg .transfer{stroke-width:1.4}.trm-lg .metro{stroke-width:2.2;stroke-dasharray:10 2.5}
 .trm-lg .lg-night{fill:var(--ink)}.trm-lg .lg-n{fill:var(--card);font-weight:700;font-size:10.5px}
 .trm-lg .lg-pass{fill:var(--card);stroke:var(--ink);stroke-width:1.8}
 """
 
 SVG_CSS = """
-svg{--land:#E8E9E2;--land-o:#F1F1EC;--water:#D9E6EC;--coast:#B4BAB0;--ink:#1A2230;--muted:#5A6472;--card:#FFFFFF;
+svg{--land:#E8E9E2;--land-o:#F1F1EC;--water:#D9E6EC;--coast:#B4BAB0;--park:#D8E5CF;--road:#FFFFFF;--rail:#A9AEA8;--ink:#1A2230;--muted:#5A6472;--card:#FFFFFF;
  font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei",sans-serif}
 .water{fill:var(--water)}.land{fill:var(--land);stroke:var(--coast);stroke-width:.7px}.land-o{fill:var(--land-o);stroke:var(--coast);stroke-width:.5px}
 .leg{fill:none;stroke:var(--rc);vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}
 .leg.train{stroke-width:2.6px}.leg.car-o{stroke-width:5.5px}.leg.car-i{stroke:var(--land);stroke-width:1.8px}
 .leg.flight{stroke-width:2px;stroke-dasharray:6 4}.leg.ferry{stroke-width:2px;stroke-dasharray:9 3 2 3}
 .leg.bus{stroke-width:2px;stroke-dasharray:2 2}.leg.day{stroke-width:2.2px;stroke-dasharray:.1 4.5}
-.leg.walk{stroke-width:1.6px;stroke-dasharray:.1 3}.leg.transfer{stroke-width:1.4px}.leg.optional{opacity:.5}
+.leg.walk{stroke-width:1.6px;stroke-dasharray:.1 3}.leg.transfer{stroke-width:1.4px}.leg.metro{stroke-width:2.2px;stroke-dasharray:10 2.5}
+.park{fill:var(--park)}
+.water-osm{fill:var(--water)}
+.road1,.road2,.road3,.rail{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.road1{stroke:var(--road);stroke-width:2.4px}.road2{stroke:var(--road);stroke-width:1.6px}.road3{stroke:var(--road);stroke-width:1px}
+.rail{stroke:var(--rail);stroke-width:.9px;stroke-dasharray:3 2}
+.osm-attr{fill:var(--muted);paint-order:stroke;stroke:var(--land)}
+.leg.optional{opacity:.5}
 .night{fill:var(--rc);stroke:var(--card);stroke-width:1.5px;vector-effect:non-scaling-stroke}.nights{fill:var(--card);font-weight:700}
 .pass,.air{fill:var(--card);stroke:var(--rc);stroke-width:1.8px;vector-effect:non-scaling-stroke}
 .leader{fill:none;stroke:var(--muted);stroke-width:.8px;vector-effect:non-scaling-stroke}
