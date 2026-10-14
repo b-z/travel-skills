@@ -37,7 +37,7 @@ compatibility: python3 (standard library only); network on first run (Natural Ea
 
 4. **交付。**
    - 用户要图片或 PDF：给 PNG / PDF 文件路径，或者用文件发送工具发过去。
-   - 放进 Artifact 网页：用 `--fragment`，把 `maps.css` 放进页面的 `<style>`，把 `maps.fragment.html` 原样插进页面。片段里所有样式和底图都是内联的，不依赖外部资源，符合 Artifact 的 CSP。片段里的 SVG `id` 是 `trm-focus` / `trm-other`，同一页面只插一次片段。
+   - 放进 Artifact 网页：用 `--fragment`，把 `maps.css` 放进页面的 `<style>`，把 `maps.fragment.html` 原样插进页面。片段里所有样式和底图都是内联的，不依赖外部资源，符合 Artifact 的 CSP。同一页面要插多个片段（比如全国图一组、城市图一组）时，每次运行加不同的 `--ns`（如 `--ns london`），SVG id 就不会冲突；`maps.css` 只需放一次。想把卡片拆开放到页面各处（例如每天一节，地图放在当天的文字旁边）时，把片段开头的 `<svg width="0" …><defs>…</defs></svg>` 原样放进页面，再把各个 `<figure class="trm-card">` 挪到想要的位置，外层容器加 `class="trm-scope"`，配色变量就会生效。
    - 独立网页：`maps.html` 自带浅色/深色主题，可以直接打开或分享。
 
 ## 城市级路线
