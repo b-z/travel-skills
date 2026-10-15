@@ -20,9 +20,12 @@ UA = {'User-Agent': 'landmark-photos/1.0 (travel planning gallery)'}
 THUMB_W = 500           # Wikimedia 的标准缩略图宽度之一；非标准宽度更容易被限流（HTTP 429）
 FREE = re.compile(r'(cc[ -]?by|cc0|public domain|pd|gfdl|attribution|no restrictions)', re.I)
 TEXT = {
-    'zh': {'credits': '照片来源（Wikimedia Commons）', 'anon': '佚名', 'png_foot': '照片均来自 Wikimedia Commons，按各自许可使用。'},
-    'en': {'credits': 'Photo credits (Wikimedia Commons)', 'anon': 'Unknown', 'png_foot': 'All photos from Wikimedia Commons under their respective licences.'},
+    'zh': {'credits': '照片来源（Wikimedia Commons）', 'anon': '佚名', 'png_foot': '照片均来自 Wikimedia Commons，按各自许可使用。',
+           'what': '是什么', 'why': '为什么去', 'who': '适合谁'},
+    'en': {'credits': 'Photo credits (Wikimedia Commons)', 'anon': 'Unknown', 'png_foot': 'All photos from Wikimedia Commons under their respective licences.',
+           'what': 'What it is', 'why': 'Why go', 'who': 'Who it suits'},
 }
+NOTES = ('what', 'why', 'who')   # 解说卡片的三栏
 
 
 def log(*a):
@@ -181,14 +184,27 @@ def cmd_fetch(spec, out, refresh):
 
 def cmd_build(spec, out, embed, fragment, png, pdf):
     lang = spec.get('lang', 'zh')
-    T = TEXT.get(lang, TEXT['zh'])
+    T = {**TEXT.get(lang, TEXT['zh']), **spec.get('labels', {})}
     meta = json.load(open(os.path.join(out, 'meta.json')))
+    # 任何一项有 what / why / who 就整页改成解说卡片；都没有时保持原来的小图墙，输出和以前逐字节一样
+    rich = any(it.get(f) for _, it in items_of(spec) for f in NOTES)
+    css = CSS + RICH_CSS if rich else CSS
 
     def src(key, inline):
         p = os.path.join(out, 'img', key + '.jpg')
         if inline:
             return 'data:image/jpeg;base64,' + base64.b64encode(open(p, 'rb').read()).decode()
         return f'img/{key}.jpg'
+
+    def rich_card(it, img, credit):
+        name = esc(it.get('name', it['key']))
+        tags = ''.join(f'<li>{esc(t)}</li>' for t in it.get('tags', []))
+        dl = ''.join(f'<dt>{esc(T[f])}</dt><dd>{esc(it[f])}</dd>' for f in NOTES if it.get(f))
+        return (f'<figure class="lp-card"><img src="{img}" alt="{name}" title="{esc(credit)}" width="420" height="315">'
+                f'<figcaption><b>{name}</b>'
+                + (f'<span>{esc(it["note"])}</span>' if it.get('note') else '')
+                + (f'<ul class="lp-tags">{tags}</ul>' if tags else '')
+                + (f'<dl>{dl}</dl>' if dl else '') + '</figcaption></figure>')
 
     def grid_html(inline):
         parts, used = [], []
@@ -197,7 +213,8 @@ def cmd_build(spec, out, embed, fragment, png, pdf):
             parts.append(f'<section class="lp-group" style="--gc:{esc(col)}"><div class="lp-head">'
                          + (f'<span class="lp-badge">{esc(g["id"])}</span>' if g.get('id') else '')
                          + f'<span class="lp-title">{esc(g.get("title", ""))}</span>'
-                         + (f'<span class="lp-sub">{esc(g["sub"])}</span>' if g.get('sub') else '') + '</div><div class="lp-grid">')
+                         + (f'<span class="lp-sub">{esc(g["sub"])}</span>' if g.get('sub') else '')
+                         + ('</div><div class="lp-grid lp-rich">' if rich else '</div><div class="lp-grid">'))
             for it in g['items']:
                 k = it['key']
                 if k not in meta:
@@ -206,6 +223,9 @@ def cmd_build(spec, out, embed, fragment, png, pdf):
                     used.append(k)
                 m = meta[k]
                 credit = f'{m["artist"] or T["anon"]} · {m["license"]}'
+                if rich:
+                    parts.append(rich_card(it, src(k, inline), credit))
+                    continue
                 parts.append(f'<figure class="lp-card"><img src="{src(k, inline)}" alt="{esc(it.get("name", k))}" title="{esc(credit)}">'
                              f'<figcaption><b>{esc(it.get("name", k))}</b>'
                              + (f'<span>{esc(it["note"])}</span>' if it.get('note') else '') + '</figcaption></figure>')
@@ -219,13 +239,13 @@ def cmd_build(spec, out, embed, fragment, png, pdf):
     grid, used = grid_html(embed)
     title = spec.get('title', '')
     head = (f'<h1>{esc(title)}</h1>' if title else '') + (f'<p class="lp-lead">{esc(spec["subtitle"])}</p>' if spec.get('subtitle') else '')
-    page = PAGE.format(lang='zh-CN' if lang == 'zh' else 'en', theme='', title=esc(title or 'Gallery'), css=CSS, body=head + grid)
+    page = PAGE.format(lang='zh-CN' if lang == 'zh' else 'en', theme='', title=esc(title or 'Gallery'), css=css, body=head + grid)
     gp = os.path.join(out, 'gallery.html')
     open(gp, 'w', encoding='utf-8').write(page)
     made = [gp]
     if fragment:
         open(os.path.join(out, 'gallery.fragment.html'), 'w', encoding='utf-8').write(grid)
-        open(os.path.join(out, 'gallery.css'), 'w', encoding='utf-8').write(CSS)
+        open(os.path.join(out, 'gallery.css'), 'w', encoding='utf-8').write(css)
         made += [os.path.join(out, 'gallery.fragment.html'), os.path.join(out, 'gallery.css')]
 
     chrome = find_chrome() if (png or pdf) else None
@@ -240,7 +260,27 @@ def cmd_build(spec, out, embed, fragment, png, pdf):
                             '--allow-file-access-from-files'], tmp)
         os.unlink(tmp)
         made.append(pp)
-    if chrome and png:
+    if chrome and png and rich:
+        # 解说卡片的文字长短不一，高度算不准：先在同样宽度下渲染一遍读出页面高度，再按这个高度截图
+        COLS, CW, GAP = 3, 270, 14
+        cr = ''.join(f'<li>{esc(meta[k]["file"])} — {esc(meta[k]["artist"] or T["anon"])}（{esc(meta[k]["license"])}）</li>' for k in used)
+        body = (head + grid_html(True)[0].rsplit('<details', 1)[0]
+                + f'<div class="lp-pngfoot">{T["png_foot"]}</div><ul class="lp-pngcred">{cr}</ul>'
+                + '<script>addEventListener("load",()=>document.body.setAttribute("data-h",'
+                  'Math.ceil(document.documentElement.getBoundingClientRect().height)))</script>')
+        fixed = PAGE.format(lang='zh-CN' if lang == 'zh' else 'en', theme=' data-theme="light"', title='',
+                            css=css + PNG_CSS + RICH_PNG_CSS, body=body)
+        tmp = os.path.join(out, '.png.html')
+        open(tmp, 'w', encoding='utf-8').write(fixed)
+        w = COLS * CW + (COLS - 1) * GAP + 48
+        dom = run_chrome(chrome, ['--force-device-scale-factor=1', f'--window-size={w},800', '--dump-dom'], tmp)
+        m = re.search(r'data-h="(\d+)"', dom or '')
+        h = int(m.group(1)) if m else 4000
+        pp = os.path.join(out, 'gallery.png')
+        run_chrome(chrome, ['--force-device-scale-factor=2', f'--window-size={w},{h}', f'--screenshot={pp}'], tmp)
+        os.unlink(tmp)
+        made.append(pp)
+    elif chrome and png:
         # 固定版式，高度可以算准：5 列，卡片 180×(135+66)
         COLS, CW, IH, CH, GAP, HEAD, GGAP = 5, 180, 135, 66, 12, 30, 22
         h = 24 + (44 if title else 0) + (26 if spec.get('subtitle') else 0)
@@ -275,9 +315,10 @@ def find_chrome():
 
 def run_chrome(chrome, extra, page):
     with tempfile.TemporaryDirectory() as prof:
-        subprocess.run([chrome, '--headless=new', '--disable-gpu', '--hide-scrollbars', f'--user-data-dir={prof}',
-                        '--virtual-time-budget=6000', *extra, 'file://' + os.path.abspath(page)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+        r = subprocess.run([chrome, '--headless=new', '--disable-gpu', '--hide-scrollbars', f'--user-data-dir={prof}',
+                            '--virtual-time-budget=6000', *extra, 'file://' + os.path.abspath(page)],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=180)
+        return r.stdout.decode('utf-8', 'replace')
 
 
 CSS = """
@@ -301,6 +342,33 @@ CSS = """
 .lp-credits summary{cursor:pointer}
 .lp-credits ul{margin:6px 0 0;padding-left:1.2em;display:flex;flex-direction:column;gap:2px;word-break:break-word}
 @media (max-width:640px){.lp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+"""
+
+# 解说卡片（任何一项有 what / why / who 时追加）。分组颜色用在标签底色和三栏小标题上；深色主题把小标题颜色调亮
+RICH_CSS = """
+.lp-group{--gt:var(--gc)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .lp-group{--gt:color-mix(in srgb,var(--gc) 45%,#fff)}}
+:root[data-theme="dark"] .lp-group{--gt:color-mix(in srgb,var(--gc) 45%,#fff)}
+.lp-grid.lp-rich{grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.lp-rich .lp-card{border-radius:10px}
+.lp-rich .lp-card figcaption{padding:12px 14px 14px;gap:8px;font-size:13.5px;line-height:1.6}
+.lp-rich .lp-card figcaption b{font-size:16px;font-weight:700;line-height:1.4}
+.lp-rich .lp-card figcaption span{margin-top:-6px}
+.lp-tags{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:5px}
+.lp-tags li{font-size:12px;line-height:1.4;padding:2px 7px;border-radius:4px;background:color-mix(in srgb,var(--gc) 14%,var(--card));color:var(--ink)}
+.lp-rich dl{margin:0;display:grid;gap:6px}
+.lp-rich dt{font-size:11.5px;letter-spacing:.08em;font-weight:700;color:var(--gt)}
+.lp-rich dd{margin:-4px 0 0;overflow-wrap:anywhere}
+@media (max-width:640px){.lp-grid.lp-rich{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}}
+@media print{.lp-grid.lp-rich{grid-template-columns:repeat(3,1fr) !important}}
+"""
+
+RICH_PNG_CSS = """
+.lp-grid.lp-rich{grid-template-columns:repeat(3,270px);gap:14px}
+.lp-rich .lp-card img{width:270px;height:202px}
+.lp-rich .lp-card figcaption{height:auto;overflow:visible}
+.lp-rich .lp-card figcaption span{display:block}
+.lp-pngcred{margin-bottom:24px}
 """
 
 PNG_CSS = """

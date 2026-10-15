@@ -1,0 +1,17 @@
+{
+  "title": "Oahu 景点解说",
+  "subtitle": "示例：两个人第一次去夏威夷，读者对景点不熟，每张照片下面写是什么、为什么去、适合谁。取自五日行程里的两天。",
+  "lang": "zh",
+  "groups": [
+    {"id": "D2", "title": "11/21 日出、浮潜、东海岸", "color": "#C2562B", "items": [
+      {"key": "diamond-head", "name": "Diamond Head", "tags": ["要预约", "$5/人 + $10/车", "往返 1.5–2 h"], "what": "檀香山的地标火山口。从火山口内部爬到 232 m 高的边缘，单程约 1.3 km，有台阶、隧道和旧的军事观测碉堡。", "why": "山顶一眼能看到整条 Waikiki、市区天际线和 Koko Head。日出时侧光最好，也最凉快。", "who": "体力一般就行，上山约 40 分钟。非居民必须预约，场次开始后 30 分钟内入场。", "wiki": "Diamond Head, Hawaii"},
+      {"key": "hanauma", "name": "Hanauma Bay", "tags": ["要预约", "$25/人", "周一二闭园", "2.5–3 h"], "what": "一个火山口塌进海里形成的圆形海湾。湾里是珊瑚礁自然保护区，浅水区就有鹦嘴鱼、刺尾鲷，运气好能遇到海龟。", "why": "Oahu 最容易上手的浮潜点：浪小、离岸近、鱼多。入园前要先看 9 分钟的保护说明视频。", "who": "会一点游泳的人。不会游泳的穿救生衣在浅水也能看到鱼。浮潜装备可以在园内租。", "wiki": "Hanauma Bay"},
+      {"key": "lanikai", "name": "Lanikai", "tags": ["步行 15 分钟", "不能停车"], "what": "Kailua 南边一片住宅区前的海滩，正对着两座 Mokulua 小岛，常被评为全美最美海滩之一。", "why": "白沙、浅蓝绿色的海，加上海上两座小岛，是夏威夷明信片上最常见的画面之一。", "who": "所有人。住宅区不让游客停车，从 Kailua Beach Park 沿路走过去约 15 分钟。", "search": "Lanikai Beach Mokulua"}
+    ]},
+    {"id": "D3", "title": "11/22 环岛：东北海岸 → 北岸", "color": "#3F7A3A", "items": [
+      {"key": "mokolii", "name": "草帽岛 Mokoliʻi", "tags": ["免费", "20 分钟"], "what": "Kualoa 海滩公园外海的一座小岛，形状像一顶斗笠，所以有“草帽岛”的叫法。", "why": "草坪、海、小岛，背后是 Kualoa 的锯齿山壁，一个画面里全有。免费，停车也方便。", "who": "所有人。退潮时有人涉水走过去，不建议，水流比看上去急。", "wiki": "Mokoliʻi"},
+      {"key": "pipeline", "name": "Pipeline", "tags": ["看浪", "带长焦"], "what": "Ehukai 海滩前面的一片礁石浪点（Banzai Pipeline）。浪打在浅礁上会卷成管状，是全世界最有名、也最危险的冲浪点。", "why": "浪大的日子，能离得很近看冲浪手钻进浪管再出来。", "who": "所有人。浪点离沙滩只有几十米，长焦能拍到很近的画面。", "wiki": "Banzai Pipeline"},
+      {"key": "laniakea", "name": "Laniakea 海龟", "tags": ["看运气", "离海龟 3 m 以上"], "what": "绿海龟经常上岸晒太阳的一段海滩。", "why": "很有可能看到野生海龟趴在沙滩上。", "who": "所有人。按规定要离海龟 3 m 以上，不能摸。路边停车很乱，过马路要小心。", "search": "green sea turtle Laniakea beach"}
+    ]}
+  ]
+}

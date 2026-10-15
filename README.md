@@ -5,7 +5,7 @@
 | 技能 | 做什么 | 输出 |
 |---|---|---|
 | [`trip-route-map`](skills/trip-route-map/SKILL.md) | 把一个或几个路线方案画在真实底图上，每个方案（或每天）一张小图：住几晚、日期、途经景点、交通方式。国家尺度用 Natural Earth 海岸线，城市尺度用 OpenStreetMap 街道 | HTML（浅色/深色）、嵌入用片段、每个方案一张 PNG / SVG、整页 PDF |
-| [`landmark-photos`](skills/landmark-photos/SKILL.md) | 给每个景点找一张经典照片（维基百科首图 / Wikimedia Commons），按路线或城市分组排成小图墙，保留作者和许可 | HTML、嵌入用片段、一张长 PNG、PDF |
+| [`landmark-photos`](skills/landmark-photos/SKILL.md) | 给每个景点找一张经典照片（维基百科首图 / Wikimedia Commons），按路线或城市分组排成小图墙，保留作者和许可；读者对目的地不熟时，改成带「是什么 / 为什么去 / 适合谁」解说的卡片 | HTML、嵌入用片段、一张长 PNG、PDF |
 
 | 国家尺度 | 城市尺度 |
 |---|---|
