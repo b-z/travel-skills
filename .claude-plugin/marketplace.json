@@ -1,6 +1,6 @@
 {
   "name": "travel-skills",
-  "description": "Travel visual skills: route maps and landmark photo walls",
+  "description": "Travel visual skills: route maps, landmark photo walls and travel-journal prompts",
   "owner": {
     "name": "b-z"
   },
@@ -8,7 +8,7 @@
     {
       "name": "travel-skills",
       "source": "./",
-      "description": "Route maps on a real base map, and landmark photo walls with attribution, from a trip plan already in the conversation."
+      "description": "Route maps on a real base map, landmark photo walls with attribution, and hand-drawn travel-journal image prompts, from a trip plan already in the conversation."
     }
   ]
 }
