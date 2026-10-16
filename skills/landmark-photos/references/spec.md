@@ -9,7 +9,7 @@
 | `title` | | 页面标题 |
 | `subtitle` | | 标题下的一行说明（适合写"照片多是夏天拍的"这类提醒） |
 | `lang` | | 署名等固定文字的语言，`zh`（默认）或 `en` |
-| `wiki_lang` | | `wiki` 字段用哪个语言的维基，默认 `en`（英文维基的首图最稳定） |
+| `wiki_lang` | | `wiki` 字段用哪个语言的维基，默认 `en`（英文维基的首图最稳定）；日本等地的小景点用 `ja`，条目更全 |
 | `labels` | | 改解说卡片三栏的小标题，如 `{"why": "看点"}`；默认 `zh` 是「是什么」「为什么去」「适合谁」，`en` 是 What it is / Why go / Who it suits |
 | `groups` | 是 | 分组列表 |
 
@@ -42,9 +42,10 @@
 | `name` | 显示名 |
 | `note` | 名字下面的一行备注，可省略 |
 | `wiki` | 维基条目名，取条目首图 |
-| `search` | Commons 搜索词，取第一个 jpg 结果；`pick` 可以指定取第几个（从 0 开始） |
+| `search` | Commons 搜索词，取第一个 jpg 结果；`pick` 可以指定取第几个（从 0 开始，和 `candidates` 列出的编号一致）。也是 `candidates` 的搜索词 |
 | `file` | 直接指定 Commons 文件名（带不带 `File:` 都行） |
 | `wiki_lang` | 只对这一项改用别的语言维基 |
+| `photo_note` | 照片拍的不是景点本身时写明，如 `"竜串海岸的砂岩，不是馆内"`。显示为"照片：…"，写在名字下面和署名列表里 |
 | `tags` | 解说卡片：名字下面的几个小标签（字符串数组），写时长、费用、要不要预约、开放时间 |
 | `what` | 解说卡片「是什么」：客观事实，一两句 |
 | `why` | 解说卡片「为什么去」：值得去的理由，一两句 |
@@ -65,8 +66,10 @@
 
 | 路径 | 说明 |
 |---|---|
-| `img/<key>.jpg` | 缩到最长边 420 像素的 JPEG |
-| `raw/` | Commons 的 500px 原始缩略图 |
-| `meta.json` | 每张图的文件名、来源页、作者、许可、选图方式 |
+| `img/<key>.jpg` | 缩到最长边 420 像素的 JPEG；`fetch --max 960 --format webp` 时是 `img/<key>.webp` |
+| `raw/` | Commons 的标准宽度缩略图（≥ `--max` 的最小标准宽度：500、960、1280、1920） |
+| `meta.json` | 每张图的文件名、来源页、作者、许可、选图方式、本地文件名 `img`、`max` |
+| `candidates.json` / `candidates.html` / `candidates.png` / `candidates/` | `candidates` 生成：每个景点的候选照片 |
+| `assets.json` / `credits.fragment.html` | `assets` 生成：data URI 素材和署名列表 |
 | `contact.html` / `contact.png` | 检查页（fetch 生成） |
 | `gallery.html` / `.png` / `.pdf` / `.fragment.html` + `gallery.css` | build 生成 |

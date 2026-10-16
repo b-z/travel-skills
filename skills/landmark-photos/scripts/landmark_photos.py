@@ -2,28 +2,41 @@
 """景点代表照片：从 Wikimedia Commons 取免费授权照片，排成按组分类的小图墙，并保留署名。
 
 用法:
-  python3 landmark_photos.py fetch SPEC.json --out DIR [--refresh KEY ...]
+  python3 landmark_photos.py candidates SPEC.json --out DIR [--keys KEY ...] [--n 8]
+  python3 landmark_photos.py fetch SPEC.json --out DIR [--refresh KEY ...] [--max 420] [--format jpg|webp]
   python3 landmark_photos.py build SPEC.json --out DIR [--embed] [--fragment] [--png] [--pdf]
+  python3 landmark_photos.py assets SPEC.json --out DIR
 
-fetch  下载照片到 DIR/img/<key>.jpg，元数据（作者、许可、来源）写进 DIR/meta.json，
+candidates  每个景点在 Commons 搜前 N 张照片，列出文件名、尺寸、许可，生成 DIR/candidates.html（+ .png）
+            供挑图；挑中的写进 SPEC 的 file 字段。
+fetch  下载照片到 DIR/img/<key>.jpg（或 .webp），元数据（作者、许可、来源）写进 DIR/meta.json，
        并生成 DIR/contact.html（+ contact.png，有 Chrome 时）供人工检查选图。已下载的会跳过。
+       --max 是最长边像素（默认 420，网页大图用 960），--format webp 体积约为 JPEG 的一半。
 build  生成 DIR/gallery.html（图片用相对路径 img/…；--embed 改成内嵌 data URI 的单文件），
        --fragment 额外输出 gallery.fragment.html + gallery.css，--png 输出 gallery.png，--pdf 输出 gallery.pdf。
+assets 不排版，只输出素材：DIR/assets.json（每张图的 data URI、名字、署名）和 DIR/credits.fragment.html，
+       给自己排版的网页把照片放进各自的卡片里。
 
-只用 Python 标准库；缩图优先用 macOS 的 sips，其次 Pillow，都没有就保留 Commons 的 500px 缩略图原样。
+只用 Python 标准库；缩图优先用 macOS 的 sips，其次 Pillow，都没有就保留 Commons 的缩略图原样。
 SPEC 格式见 references/spec.md。
 """
 import argparse, base64, html, json, math, os, re, shutil, subprocess, sys, tempfile, time
 import urllib.error, urllib.parse, urllib.request
 
-UA = {'User-Agent': 'landmark-photos/1.0 (travel planning gallery)'}
-THUMB_W = 500           # Wikimedia 的标准缩略图宽度之一；非标准宽度更容易被限流（HTTP 429）
+# Wikimedia 要求 User-Agent 带联系方式，否则更容易被限流
+UA = {'User-Agent': 'landmark-photos/1.1 (travel planning gallery; https://github.com/b-z/travel-skills)'}
+STD_W = (330, 500, 960, 1280, 1920)   # Wikimedia 的标准缩略图宽度；非标准宽度更容易被限流（HTTP 429）
+MIME = {'.jpg': 'image/jpeg', '.webp': 'image/webp'}
+
+
+def thumb_w(maxpx):
+    return next((w for w in STD_W if w >= maxpx), STD_W[-1])
 FREE = re.compile(r'(cc[ -]?by|cc0|public domain|pd|gfdl|attribution|no restrictions)', re.I)
 TEXT = {
     'zh': {'credits': '照片来源（Wikimedia Commons）', 'anon': '佚名', 'png_foot': '照片均来自 Wikimedia Commons，按各自许可使用。',
-           'what': '是什么', 'why': '为什么去', 'who': '适合谁'},
+           'what': '是什么', 'why': '为什么去', 'who': '适合谁', 'photo': '照片：'},
     'en': {'credits': 'Photo credits (Wikimedia Commons)', 'anon': 'Unknown', 'png_foot': 'All photos from Wikimedia Commons under their respective licences.',
-           'what': 'What it is', 'why': 'Why go', 'who': 'Who it suits'},
+           'what': 'What it is', 'why': 'Why go', 'who': 'Who it suits', 'photo': 'Photo: '},
 }
 NOTES = ('what', 'why', 'who')   # 解说卡片的三栏
 
@@ -64,15 +77,33 @@ def commons_search(query):
     return [h['title'][5:] for h in r['query']['search'] if h['title'].lower().endswith(('.jpg', '.jpeg'))]
 
 
+def commons_candidates(query, n, width=330):
+    """一次请求拿到搜索结果和每张图的尺寸、许可、缩略图地址；顺序和 commons_search 一致（只留 jpg）"""
+    r = api('commons.wikimedia.org', {'action': 'query', 'generator': 'search', 'gsrnamespace': 6, 'gsrsearch': query,
+                                      'gsrlimit': 15, 'prop': 'imageinfo', 'iiprop': 'url|size|extmetadata',
+                                      'iiextmetadatafilter': 'Artist|LicenseShortName', 'iiurlwidth': width})
+    pages = sorted(r.get('query', {}).get('pages', []), key=lambda p: p.get('index', 0))
+    out = []
+    for p in pages:
+        if not p['title'].lower().endswith(('.jpg', '.jpeg')) or not p.get('imageinfo'):
+            continue
+        ii = p['imageinfo'][0]
+        em = ii.get('extmetadata', {})
+        out.append({'file': p['title'][5:], 'w': ii.get('width'), 'h': ii.get('height'), 'thumb': ii.get('thumburl'),
+                    'license': strip(em.get('LicenseShortName', {}).get('value'), 40),
+                    'artist': strip(em.get('Artist', {}).get('value'), 40)})
+    return out[:n]
+
+
 def lead_image(title, lang):
     r = api(f'{lang}.wikipedia.org', {'action': 'query', 'titles': title, 'prop': 'pageimages', 'piprop': 'name', 'redirects': 1})
     pg = r['query']['pages'][0]
     return pg.get('pageimage'), pg.get('title')
 
 
-def imageinfo(fname):
+def imageinfo(fname, width=500):
     r = api('commons.wikimedia.org', {'action': 'query', 'titles': 'File:' + fname, 'prop': 'imageinfo',
-                                      'iiprop': 'url|extmetadata|size', 'iiurlwidth': THUMB_W})
+                                      'iiprop': 'url|extmetadata|size', 'iiurlwidth': width})
     pg = r['query']['pages'][0]
     if pg.get('missing') or 'imageinfo' not in pg:
         return None
@@ -80,19 +111,46 @@ def imageinfo(fname):
 
 
 def resize(src, dst, maxpx=420):
+    """缩到最长边 maxpx；dst 的扩展名决定格式（.jpg / .webp）。返回实际写出的路径（webp 做不了时退回 jpg）"""
+    if dst.endswith('.webp'):
+        try:
+            from PIL import Image  # noqa
+            im = Image.open(src).convert('RGB')
+            im.thumbnail((maxpx, maxpx))
+            im.save(dst, 'WEBP', quality=78)
+            return dst
+        except Exception:
+            pass
+        if shutil.which('cwebp'):
+            r = subprocess.run(['cwebp', '-quiet', '-q', '78', '-resize', str(maxpx), '0', src, '-o', dst],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r.returncode == 0:
+                return dst   # 横图正好；竖图按宽度缩，会比 maxpx 高一些
+        log('  没有 Pillow（带 WebP）或 cwebp，改存 JPEG')
+        dst = dst[:-5] + '.jpg'
     if shutil.which('sips'):
         r = subprocess.run(['sips', '-s', 'format', 'jpeg', '-s', 'formatOptions', '72', '-Z', str(maxpx), src, '--out', dst],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if r.returncode == 0:
-            return
+            return dst
     try:
         from PIL import Image  # noqa
         im = Image.open(src).convert('RGB')
         im.thumbnail((maxpx, maxpx))
         im.save(dst, 'JPEG', quality=72)
-        return
+        return dst
     except Exception:
         shutil.copyfile(src, dst)
+        return dst
+
+
+def data_uri(path):
+    mime = MIME.get(os.path.splitext(path)[1].lower(), 'image/jpeg')
+    return f'data:{mime};base64,' + base64.b64encode(open(path, 'rb').read()).decode()
+
+
+def img_name(meta_item, key):
+    return meta_item.get('img', key + '.jpg')
 
 
 def items_of(spec):
@@ -101,9 +159,59 @@ def items_of(spec):
             yield g, it
 
 
+# ---------------- candidates ----------------
+
+def cmd_candidates(spec, out, keys, n):
+    cdir = os.path.join(out, 'candidates')
+    os.makedirs(cdir, exist_ok=True)
+    rows, report = [], {}
+    seen = set()
+    for _, it in items_of(spec):
+        key = it['key']
+        if key in seen or (keys and key not in keys):
+            continue
+        seen.add(key)
+        q = it.get('search') or it.get('wiki') or it.get('name') or key
+        try:
+            cands = commons_candidates(q, n)
+        except Exception as e:
+            log(f'✗ {key}: {e}'); continue
+        report[key] = {'query': q, 'candidates': [{k: v for k, v in c.items() if k != 'thumb'} for c in cands]}
+        log(f'## {key}（搜 "{q}"）')
+        cells = []
+        for i, c in enumerate(cands):
+            flag = '' if FREE.search(c['license'] or '') else ' ⚠'
+            log(f'  [{i}] {c["file"]}  {c["w"]}×{c["h"]}  {c["license"]}{flag}')
+            tp = os.path.join(cdir, f'{key}-{i}.jpg')
+            if c['thumb'] and not os.path.exists(tp):
+                try:
+                    open(tp, 'wb').write(get(c['thumb']))
+                except Exception as e:
+                    log(f'    缩略图下载失败: {e}')
+                time.sleep(0.5)
+            small = ' small' if (c['w'] or 0) < 960 else ''
+            cells.append(f'<figure><img src="candidates/{esc(key)}-{i}.jpg"><figcaption><b>[{i}]</b> {esc(c["file"])}<br>'
+                         f'<span class="{small}">{c["w"]}×{c["h"]}</span> · <i>{esc(c["license"])}</i>{flag}</figcaption></figure>')
+        rows.append(f'<h2>{esc(key)} <small>{esc(it.get("name", ""))} · 搜 “{esc(q)}”</small></h2><div class="g">{"".join(cells)}</div>')
+        time.sleep(1.5)
+    json.dump(report, open(os.path.join(out, 'candidates.json'), 'w'), ensure_ascii=False, indent=1)
+    sheet = os.path.join(out, 'candidates.html')
+    open(sheet, 'w', encoding='utf-8').write(
+        '<!doctype html><meta charset="utf-8"><style>body{margin:0;padding:8px 12px;font:11px/1.35 -apple-system,sans-serif;width:1100px;box-sizing:border-box}'
+        'h2{font-size:15px;margin:10px 0 6px}h2 small{font-weight:400;color:#666}.g{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}'
+        'figure{margin:0}img{width:100%;height:120px;object-fit:cover;display:block;background:#eee}'
+        'figcaption{height:44px;overflow:hidden;word-break:break-all}.small{color:#c00}</style>' + ''.join(rows))
+    chrome = find_chrome()
+    if chrome:
+        h = sum(40 + math.ceil(len(r['candidates']) / 6) * 176 for r in report.values()) + 20
+        run_chrome(chrome, ['--force-device-scale-factor=1', f'--window-size=1100,{max(h, 200)}',
+                            f'--screenshot={os.path.join(out, "candidates.png")}', '--allow-file-access-from-files'], sheet)
+    print(f'候选页 {sheet}；挑中的照片把文件名写进 SPEC 的 "file"，再运行 fetch --refresh KEY。红字尺寸 = 原图不到 960px 宽')
+
+
 # ---------------- fetch ----------------
 
-def cmd_fetch(spec, out, refresh):
+def cmd_fetch(spec, out, refresh, maxpx=420, fmt='jpg'):
     lang = spec.get('wiki_lang', 'en')
     raw, img = os.path.join(out, 'raw'), os.path.join(out, 'img')
     os.makedirs(raw, exist_ok=True); os.makedirs(img, exist_ok=True)
@@ -115,7 +223,10 @@ def cmd_fetch(spec, out, refresh):
         if key in seen:
             continue
         seen.add(key)
-        if key in meta and key not in refresh and os.path.exists(os.path.join(img, key + '.jpg')):
+        want = key + '.' + fmt
+        m0 = meta.get(key, {})
+        if (key in meta and key not in refresh and os.path.exists(os.path.join(img, img_name(m0, key)))
+                and m0.get('max', 420) == maxpx and img_name(m0, key).endswith('.' + fmt)):
             continue
         try:
             fname = page = None
@@ -135,11 +246,11 @@ def cmd_fetch(spec, out, refresh):
                     fname, how = (hits[0] if hits else None), f'search "{page or it["wiki"]}"（条目首图不是照片）'
             if not fname:
                 log(f'✗ {key}: 没找到照片，在 SPEC 里给它加 search 或 file'); continue
-            info = imageinfo(fname)
+            info = imageinfo(fname, thumb_w(maxpx))
             if info is None and it.get('wiki'):   # 首图是非自由图片（只在维基百科本地），改搜 Commons
                 hits = commons_search(page or it['wiki'])
                 fname = hits[0] if hits else None
-                info = imageinfo(fname) if fname else None
+                info = imageinfo(fname, thumb_w(maxpx)) if fname else None
                 how += '（首图不在 Commons）'
             if info is None:
                 log(f'✗ {key}: Commons 上找不到 {fname}'); continue
@@ -149,10 +260,13 @@ def cmd_fetch(spec, out, refresh):
             ext = os.path.splitext(urllib.parse.urlparse(thumb).path)[1].lower() or '.jpg'
             rp = os.path.join(raw, key + ext)
             open(rp, 'wb').write(get(thumb))
-            resize(rp, os.path.join(img, key + '.jpg'))
+            done = resize(rp, os.path.join(img, want), maxpx)
             meta[key] = {'file': fname, 'page': page, 'source_url': info.get('descriptionurl'),
                          'artist': strip(em.get('Artist', {}).get('value')), 'license': lic,
-                         'license_url': em.get('LicenseUrl', {}).get('value'), 'via': how}
+                         'license_url': em.get('LicenseUrl', {}).get('value'), 'via': how,
+                         'img': os.path.basename(done), 'max': maxpx}
+            if (info.get('width') or 0) < maxpx:
+                log(f'  {key}: 原图只有 {info.get("width")}px 宽，比 --max {maxpx} 小，网页上会发虚')
             flag = '' if FREE.search(lic or '') else '  ⚠ 许可不常见，检查后再用'
             log(f'✓ {key}: {fname} [{lic}]{flag}')
             json.dump(meta, open(mp, 'w'), ensure_ascii=False, indent=1)
@@ -162,7 +276,7 @@ def cmd_fetch(spec, out, refresh):
     json.dump(meta, open(mp, 'w'), ensure_ascii=False, indent=1)
 
     # 选图检查页
-    cells = ''.join(f'<figure><img src="img/{esc(k)}.jpg"><figcaption><b>{esc(k)}</b><br>{esc(m["file"])}<br>'
+    cells = ''.join(f'<figure><img src="img/{esc(img_name(m, k))}"><figcaption><b>{esc(k)}</b><br>{esc(m["file"])}<br>'
                     f'<i>{esc(m["license"])}</i></figcaption></figure>' for k, m in meta.items() if k in seen)
     sheet = os.path.join(out, 'contact.html')
     n = len([k for k in meta if k in seen])
@@ -182,6 +296,45 @@ def cmd_fetch(spec, out, refresh):
 
 # ---------------- build ----------------
 
+def credit_items(spec, meta, keys, T):
+    """署名列表的 <li>…</li>；照片拍的不是景点本身（photo_note）时，在署名里也注明"""
+    first = {}
+    for _, it in items_of(spec):
+        first.setdefault(it['key'], it)
+    return ''.join(f'<li>{esc(first[k].get("name", k))}：'
+                   f'<a href="{esc(meta[k]["source_url"])}" target="_blank" rel="noopener">{esc(meta[k]["file"])}</a>，'
+                   f'{esc(meta[k]["artist"] or T["anon"])}，{esc(meta[k]["license"])}'
+                   + (f'（{esc(T["photo"] + first[k]["photo_note"])}）' if first[k].get('photo_note') else '') + '</li>'
+                   for k in keys)
+
+
+def cmd_assets(spec, out):
+    """不排版，只给素材：自己排版的网页把 data URI 填进各自的 <img>，署名列表放页脚"""
+    lang = spec.get('lang', 'zh')
+    T = {**TEXT.get(lang, TEXT['zh']), **spec.get('labels', {})}
+    meta = json.load(open(os.path.join(out, 'meta.json')))
+    assets, used = {}, []
+    for _, it in items_of(spec):
+        k = it['key']
+        if k not in meta or k in assets:
+            continue
+        m = meta[k]
+        used.append(k)
+        assets[k] = {'src': data_uri(os.path.join(out, 'img', img_name(m, k))), 'name': it.get('name', k),
+                     'photo_note': it.get('photo_note'),
+                     'title': f'{m["artist"] or T["anon"]} · {m["license"]}',
+                     'credit': {f: m.get(f) for f in ('file', 'source_url', 'artist', 'license', 'license_url')}}
+    ap = os.path.join(out, 'assets.json')
+    json.dump(assets, open(ap, 'w'), ensure_ascii=False, indent=1)
+    cp = os.path.join(out, 'credits.fragment.html')
+    open(cp, 'w', encoding='utf-8').write(
+        f'<details class="lp-credits"><summary>{T["credits"]}</summary><ul>{credit_items(spec, meta, used, T)}</ul></details>')
+    kb = os.path.getsize(ap) // 1024
+    print(f'生成：\n{ap}（{len(assets)} 张，{kb} KB）\n{cp}')
+    if kb > 12000:
+        log('⚠ 素材超过 12 MB，Artifact 上限 16 MB：用 --max 小一点或 --format webp 重新 fetch')
+
+
 def cmd_build(spec, out, embed, fragment, png, pdf):
     lang = spec.get('lang', 'zh')
     T = {**TEXT.get(lang, TEXT['zh']), **spec.get('labels', {})}
@@ -191,10 +344,10 @@ def cmd_build(spec, out, embed, fragment, png, pdf):
     css = CSS + RICH_CSS if rich else CSS
 
     def src(key, inline):
-        p = os.path.join(out, 'img', key + '.jpg')
+        name = img_name(meta[key], key)
         if inline:
-            return 'data:image/jpeg;base64,' + base64.b64encode(open(p, 'rb').read()).decode()
-        return f'img/{key}.jpg'
+            return data_uri(os.path.join(out, 'img', name))
+        return f'img/{name}'
 
     def rich_card(it, img, credit):
         name = esc(it.get('name', it['key']))
@@ -203,6 +356,7 @@ def cmd_build(spec, out, embed, fragment, png, pdf):
         return (f'<figure class="lp-card"><img src="{img}" alt="{name}" title="{esc(credit)}" width="420" height="315">'
                 f'<figcaption><b>{name}</b>'
                 + (f'<span>{esc(it["note"])}</span>' if it.get('note') else '')
+                + (f'<span>{esc(T["photo"] + it["photo_note"])}</span>' if it.get('photo_note') else '')
                 + (f'<ul class="lp-tags">{tags}</ul>' if tags else '')
                 + (f'<dl>{dl}</dl>' if dl else '') + '</figcaption></figure>')
 
@@ -228,12 +382,11 @@ def cmd_build(spec, out, embed, fragment, png, pdf):
                     continue
                 parts.append(f'<figure class="lp-card"><img src="{src(k, inline)}" alt="{esc(it.get("name", k))}" title="{esc(credit)}">'
                              f'<figcaption><b>{esc(it.get("name", k))}</b>'
-                             + (f'<span>{esc(it["note"])}</span>' if it.get('note') else '') + '</figcaption></figure>')
+                             + (f'<span>{esc(it["note"])}</span>' if it.get('note') else '')
+                             + (f'<span>{esc(T["photo"] + it["photo_note"])}</span>' if it.get('photo_note') else '')
+                             + '</figcaption></figure>')
             parts.append('</div></section>')
-        cr = ''.join(f'<li>{esc(next(it.get("name", k) for _, it in items_of(spec) if it["key"] == k))}：'
-                     f'<a href="{esc(meta[k]["source_url"])}" target="_blank" rel="noopener">{esc(meta[k]["file"])}</a>，'
-                     f'{esc(meta[k]["artist"] or T["anon"])}，{esc(meta[k]["license"])}</li>' for k in used)
-        parts.append(f'<details class="lp-credits"><summary>{T["credits"]}</summary><ul>{cr}</ul></details>')
+        parts.append(f'<details class="lp-credits"><summary>{T["credits"]}</summary><ul>{credit_items(spec, meta, used, T)}</ul></details>')
         return '\n'.join(parts), used
 
     grid, used = grid_html(embed)
@@ -315,9 +468,11 @@ def find_chrome():
 
 def run_chrome(chrome, extra, page):
     with tempfile.TemporaryDirectory() as prof:
-        r = subprocess.run([chrome, '--headless=new', '--disable-gpu', '--hide-scrollbars', f'--user-data-dir={prof}',
-                            '--virtual-time-budget=6000', *extra, 'file://' + os.path.abspath(page)],
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=180)
+        cmd = [chrome, '--headless=new', '--disable-gpu', '--hide-scrollbars', f'--user-data-dir={prof}',
+               '--virtual-time-budget=6000', *extra, 'file://' + os.path.abspath(page)]
+        if hasattr(os, 'geteuid') and os.geteuid() == 0:
+            cmd.insert(1, '--no-sandbox')  # 容器里以 root 运行时 Chrome 不加这个会直接退出
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=180)
         return r.stdout.decode('utf-8', 'replace')
 
 
@@ -401,10 +556,14 @@ h1{{margin:0;font-size:24px}} .lp-lead{{margin:0;color:#5A6472;font-size:14px}}
 
 def main():
     ap = argparse.ArgumentParser(description='从 Wikimedia Commons 取景点照片并排成小图墙')
-    ap.add_argument('cmd', choices=['fetch', 'build'])
+    ap.add_argument('cmd', choices=['candidates', 'fetch', 'build', 'assets'])
     ap.add_argument('spec')
     ap.add_argument('--out', required=True)
     ap.add_argument('--refresh', nargs='*', default=[], help='fetch：重新下载这些 key')
+    ap.add_argument('--max', type=int, default=420, help='fetch：最长边像素，默认 420；网页大图用 960')
+    ap.add_argument('--format', choices=['jpg', 'webp'], default='jpg', help='fetch：图片格式，webp 约小一半')
+    ap.add_argument('--keys', nargs='*', default=[], help='candidates：只看这些 key')
+    ap.add_argument('--n', type=int, default=8, help='candidates：每个景点列几张')
     ap.add_argument('--embed', action='store_true', help='build：图片内嵌为 data URI，得到单个 HTML 文件')
     ap.add_argument('--fragment', action='store_true')
     ap.add_argument('--png', action='store_true')
@@ -412,8 +571,12 @@ def main():
     a = ap.parse_args()
     spec = json.load(open(a.spec, encoding='utf-8'))
     os.makedirs(a.out, exist_ok=True)
-    if a.cmd == 'fetch':
-        cmd_fetch(spec, a.out, set(a.refresh))
+    if a.cmd == 'candidates':
+        cmd_candidates(spec, a.out, set(a.keys), a.n)
+    elif a.cmd == 'fetch':
+        cmd_fetch(spec, a.out, set(a.refresh), a.max, a.format)
+    elif a.cmd == 'assets':
+        cmd_assets(spec, a.out)
     else:
         cmd_build(spec, a.out, a.embed, a.fragment, a.png, a.pdf)
 

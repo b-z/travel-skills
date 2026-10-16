@@ -1,13 +1,13 @@
 ---
 name: travel-journal-prompt
-description: After a trip, turn the itinerary already in the conversation into a ready-to-paste prompt for ChatGPT image generation (or another image model) that draws a single hand-drawn watercolor scrapbook "travel journal" page (旅の手帳) — title and route map on top, one illustrated panel per sight with a short first-person caption, a food corner, memo cards, ticket stubs and stamps, decorated with the destination's own patterns and crafts. Japanese text by default, every place name also in the local language and script. Use this whenever the user wants a 手账 / 旅行手帐 / 旅の手帳 / travel journal / scrapbook page / 旅行报告图 of a trip that is already in the conversation — "帮我写个手账 prompt", "做一张旅行手账", "make a travel journal image prompt" — even if they don't say "skill". Planning the trip is out of scope; this skill writes a prompt, it does not generate the image.
+description: After a trip — or before it, as a plan preview page — turn the itinerary already in the conversation into a ready-to-paste prompt for ChatGPT image generation (or another image model) that draws a single hand-drawn watercolor scrapbook "travel journal" page (旅の手帳) — title and route map on top, one illustrated panel per sight with a short first-person caption, a food corner, memo cards, ticket stubs and stamps, decorated with the destination's own patterns and crafts. Japanese text by default, every place name also in the local language and script. Use this whenever the user wants a 手账 / 旅行手帐 / 旅の手帳 / travel journal / scrapbook page / 旅行报告图 of a trip that is already in the conversation — "帮我写个手账 prompt", "做一张旅行手账", "make a travel journal image prompt" — even if they don't say "skill". Planning the trip is out of scope; this skill writes a prompt, it does not generate the image.
 license: MIT
 compatibility: No scripts. The output is plain text to paste into an image model.
 ---
 
 # 手账风旅行报告 prompt
 
-旅行结束后，根据会话里已有的行程，写一段交给 ChatGPT 图像生成（或其他图像模型）的英文 prompt，让它画出一张手账风的旅行报告：竖版一页，水彩加钢笔线稿，手写体文字，纸胶带、邮票、票根。
+旅行结束后（或出发前，见「行前版」），根据会话里已有的行程，写一段交给 ChatGPT 图像生成（或其他图像模型）的英文 prompt，让它画出一张手账风的旅行报告：竖版一页，水彩加钢笔线稿，手写体文字，纸胶带、邮票、票根。
 
 这个技能只写 prompt，不生成图片，也不规划行程。
 
@@ -19,7 +19,8 @@ compatibility: No scripts. The output is plain text to paste into an image model
 |---|---|
 | prompt 本身 | 英文写说明，要画在图上的文字用原文写进引号里 |
 | 主体文字 | 日语：标题、景点名（片假名或汉字）、感想、美食、小卡片 |
-| 景点名 | 日语名下面附当地语言名，原文字母和变音符要准（见下文「当地文字」） |
+| 景点名 | 日语名下面附当地语言名，原文字母和变音符要准（见下文「当地文字」）；目的地在日本时附赫本式罗马字 |
+| 行前还是行后 | 看会话：行程还没走（日期在将来、用户说"出发前"）就写行前版，否则写行后版 |
 | 页面设计 | 用目的地的当地特色纹样和工艺，从 4–6 个具体元素里取（见下文「挑当地特色设计」） |
 | 其他 | 配色、插画角度、小涂鸦、邮票文字等自由发挥 |
 
@@ -30,6 +31,22 @@ compatibility: No scripts. The output is plain text to paste into an image model
 3. **挑当地特色设计。** 见下节，写 4–6 条具体元素。
 4. **按模板写 prompt。** 模板在 `references/template.md`，完整示例在 `examples/hawaii-oahu.md`。
 5. **交付。** 把 prompt 放在一个代码块里给用户，后面附两三条用法提示：字太多出错时怎么拆页、想换风格时删哪一行换成什么。
+
+## 行前版
+
+用户在出发前要手账（当作行程预告、发给同行的人、打印出来带着走）时，内容不能写成"已经去过"：会话里没有的经历一个字都不能出现。和行后版的区别：
+
+| 部分 | 行后版 | 行前版 |
+|---|---|---|
+| 标题 | 「〇〇旅の手帳」「〇〇へ」 | 加「計画」「予定」，如「高知ドライブ旅 計画帳」 |
+| 景点感想 | 第一人称过去式，写发生了什么 | 写计划和看点：几点到、去看什么、为什么值得去（「17時、室戸岬で夕日を待つ予定」「正午前後が一番透明らしい」）。用「〜予定」「〜したい」「〜らしい」，不写「〜した」 |
+| 插画 | 按会话里的经历画 | 按景点的典型样子画，不加会话里没有的人物和事件 |
+| 美食区 | 吃过的 | 「食べたいもの」：打算吃的 |
+| 旅メモ | 旅途中的小发现 | 出发前的待办和提醒（预约、闭馆日、日落时间、带什么），勾选框留空 |
+| 旅のまとめ | 总结 | 换成「楽しみなこと」：两三句期待 |
+| 票根 | 实际的航班、车票 | 只写确定的（日期、出发地），不编航班号和座位 |
+
+旅行结束后要再做一张，就按行后版重写感想，版式和配色可以保持一致。
 
 ## 版面结构
 
@@ -69,6 +86,7 @@ compatibility: No scripts. The output is plain text to paste into an image model
 | 格鲁吉亚 | 格鲁吉亚字母（Mkhedruli），如 თბილისი、მცხეთა；日常书写不分大小写 |
 | 哈萨克斯坦 | 哈萨克西里尔字母里的 Қ қ、Ұ ұ、Ү ү、Ә ә、Ө ө、Ң ң、Ғ ғ、І і，如 Бозжыра、Қызылқұп |
 | 乌兹别克斯坦 | 现行拉丁字母里的 oʻ、gʻ（同样用 ʻ），如 Buxoro、Samarqand |
+| 日本 | 主体文字本来就是日语，"当地语言名"一行改成赫本式罗马字，长音用长音符（macron）：Kōchi-jō、Sakamoto Ryōma、Muroto-misaki、Ōtsuki。常见词照惯例写 -jō（城）、-ji（寺）、-misaki（岬）、-hama（浜）。日语名用当地实际写法（「龍馬」还是「竜馬」、「竜串」），读音不确定的地名（如 竜串 = Tatsukushi）查到再写，查不到就只写日语 |
 
 在 prompt 末尾加一句要求保持这些字母和变音符原样。地名的当地写法查不到可靠来源时，宁可只写日语名加罗马字，不要猜。
 

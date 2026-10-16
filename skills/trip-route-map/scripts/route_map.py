@@ -19,7 +19,9 @@ import argparse, html, json, math, os, re, shutil, subprocess, sys, tempfile, ti
 import urllib.parse, urllib.request
 
 WORLD_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-{res}.json'
-UA = {'User-Agent': 'trip-route-map/1.0 (travel route sketch)'}
+# 省、州一级的界线（Natural Earth 1:10m admin-1 lines，约 21 MB，只在 SPEC 写了 "admin1": true 时下载一次）
+ADMIN1_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_10m_admin_1_states_provinces_lines.geojson'
+UA = {'User-Agent': 'trip-route-map/1.1 (travel route sketch; https://github.com/b-z/travel-skills)'}
 PALETTE = [('#A3195B', '#E46CA6'), ('#46703A', '#95C480'), ('#2B6A8A', '#7DB8D7'), ('#93600F', '#E4AF5E'),
            ('#5A4F8F', '#B2A8E3'), ('#B4462B', '#F08A6C'), ('#2F7F78', '#6FC7BE')]
 MODES = ('train', 'metro', 'car', 'flight', 'ferry', 'bus', 'day', 'walk', 'transfer')
@@ -29,12 +31,14 @@ CITY_MAX_KM = 80   # base=auto 时，所有地图都窄于这个宽度就用城�
 TEXT = {
     'zh': {'legend': '图例', 'train': '火车', 'metro': '地铁', 'car': '自驾', 'flight': '航班', 'ferry': '渡轮', 'bus': '大巴 / 跟团',
            'day': '一日游（往返）', 'walk': '步行', 'transfer': '接送车 / 机场线', 'night': '住几晚', 'pass': '途经点',
-           'air': '机场', 'foot': '线路是示意，按途经点连直线，不是实际道路。底图：Natural Earth 1:10m。',
-           'foot_city': '线路是示意，按途经点连直线，不是实际道路。底图：© OpenStreetMap 贡献者（ODbL），Natural Earth。'},
+           'num': '景点（编号和正文对应）',
+           'air': '机场', 'foot': '线路是示意，按途经点连线，不是实际道路。底图：Natural Earth 1:10m。',
+           'foot_city': '线路是示意，按途经点连线，不是实际道路。底图：© OpenStreetMap 贡献者（ODbL），Natural Earth。'},
     'en': {'legend': 'Legend', 'train': 'Train', 'metro': 'Metro', 'car': 'Drive', 'flight': 'Flight', 'ferry': 'Ferry', 'bus': 'Coach / tour',
            'day': 'Day trip (return)', 'walk': 'Walk', 'transfer': 'Transfer', 'night': 'Nights', 'pass': 'Stop',
-           'air': 'Airport', 'foot': 'Schematic: straight lines between waypoints, not actual roads. Base map: Natural Earth 1:10m.',
-           'foot_city': 'Schematic: straight lines between waypoints, not actual roads. Base map: © OpenStreetMap contributors (ODbL), Natural Earth.'},
+           'num': 'Sight (numbered as in the text)',
+           'air': 'Airport', 'foot': 'Schematic: lines through waypoints, not actual roads. Base map: Natural Earth 1:10m.',
+           'foot_city': 'Schematic: lines through waypoints, not actual roads. Base map: © OpenStreetMap contributors (ODbL), Natural Earth.'},
 }
 RENDER_W = 420.0  # 估算标注尺寸时假定的地图显示宽度（CSS 像素）
 TEXT_SCALES = [1.0, 0.85, 0.72, 0.6]  # text_scale=auto 时依次尝试
@@ -69,6 +73,54 @@ def load_world(cache, res):
         with open(path, 'wb') as f:
             f.write(data)
     return json.load(open(path))
+
+
+def load_admin1(cache):
+    path = os.path.join(cache, 'admin1-lines-10m.json')
+    if not os.path.exists(path):
+        log('下载省州界线 ne_10m_admin_1_states_provinces_lines（约 21 MB，只下载一次）…')
+        gj = json.loads(http_get(ADMIN1_URL))
+        lines = []   # 只留坐标，缓存小一些
+        for f in gj['features']:
+            g = f.get('geometry') or {}
+            parts = g.get('coordinates', []) if g.get('type') == 'MultiLineString' else [g.get('coordinates', [])]
+            lines += [[(round(x, 4), round(y, 4)) for x, y in ln] for ln in parts if len(ln) > 1]
+        json.dump(lines, open(path, 'w'))
+    return json.load(open(path))
+
+
+def clip_lines(lines, x0, x1, y0, y1):
+    """把折线裁到矩形里：落在矩形外的点处断开。"""
+    out = []
+    for ln in lines:
+        cur = []
+        for lon, lat in ln:
+            if x0 <= lon <= x1 and y0 <= lat <= y1:
+                cur.append((lon, lat))
+            elif cur:
+                if len(cur) > 1:
+                    out.append(cur)
+                cur = []
+        if len(cur) > 1:
+            out.append(cur)
+    return out
+
+
+def chaikin(pts, pinned, rounds=3):
+    """Chaikin 圆角平滑。pinned 里的下标（命名途经点）原样保留，线一定经过它们；两端点也保留。"""
+    pts = list(pts)
+    pin = set(pinned) | {0, len(pts) - 1}
+    for _ in range(rounds):
+        out, newpin = [pts[0]], {0}
+        for i in range(len(pts) - 1):
+            (ax, ay), (bx, by) = pts[i], pts[i + 1]
+            if i in pin and i != 0:
+                newpin.add(len(out)); out.append(pts[i])
+            out.append((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by))
+            out.append((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by))
+        newpin.add(len(out)); out.append(pts[-1])
+        pts, pin = out, newpin
+    return pts
 
 
 def geocode_wiki(title, lang, cache):
@@ -344,7 +396,8 @@ def safe_name(s):
 
 
 def text_w(s, fs):
-    return sum(fs * (1.0 if ord(c) > 0x2E7F else 0.56) for c in str(s))
+    # 圆圈数字、箭头等符号（U+2190–U+27BF）在中日文字体里也是全角
+    return sum(fs * (1.0 if ord(c) > 0x2E7F or 0x2190 <= ord(c) <= 0x27BF else 0.56) for c in str(s))
 
 
 def main():
@@ -472,6 +525,16 @@ def main():
                 if len(s) >= 4:
                     (focus_p if is_focus else other_p).append(ring_path(s))
     focus_d, other_d = ''.join(focus_p), ''.join(other_p)
+    adm_d = ''
+    if spec.get('admin1'):
+        segs = []
+        for ln in clip_lines(load_admin1(args.cache), cx0, cx1, cy0, cy1):
+            s_ = simplify([proj(*p) for p in ln], tol * 0.6)
+            if len(s_) > 1:
+                segs.append('M' + 'L'.join(f'{x:.1f} {y:.1f}' for x, y in s_))
+        adm_d = ''.join(segs)
+    ADM_DEF = f'<path id="{IDP}adm1" vector-effect="non-scaling-stroke" d="{adm_d}"/>' if adm_d else ''
+    ADM_USE = f'<use href="#{IDP}adm1" class="adm1"/>' if adm_d else ''
 
     base = spec.get('base', 'auto')
     city = base == 'city' or (base == 'auto' and max_w / UNIT < CITY_MAX_KM)
@@ -518,6 +581,9 @@ def main():
                 raise SystemExit(f'未知交通方式 {mode}，可选 {MODES}')
             used_modes.add(mode)
             pts = [P(v) for v in leg['via']]
+            if leg.get('smooth', spec.get('smooth', False)) and mode != 'flight' and len(pts) > 2:
+                # 命名地点（places 里的键）必须在线上，匿名坐标只用来带方向，可以被圆角切掉
+                pts = chaikin(pts, [i for i, v in enumerate(leg['via']) if isinstance(v, str)])
             opt = ' optional' if leg.get('optional') else ''
             if mode == 'flight':
                 (ax, ay), (bx, by) = pts[0], pts[-1]
@@ -573,7 +639,7 @@ def main():
             pl = places[s['place']] if isinstance(s['place'], str) else {}
             nights = int(s.get('nights', 0) or 0)
             kind = s.get('kind') or ('night' if nights else 'pass')
-            used_kinds.add(kind)
+            used_kinds.add('num' if (kind == 'pass' and s.get('num') is not None) else kind)
             stop_specs.append(dict(x=x, y=y, nights=nights, kind=kind, s=s, name=s.get('name', pl.get('name', s['place']))))
 
         def render_points(ts):
@@ -592,6 +658,11 @@ def main():
                     out.append(f'<rect class="air" x="{x - rr:.1f}" y="{y - rr:.1f}" width="{2 * rr:.1f}" height="{2 * rr:.1f}" '
                                f'transform="rotate(45 {x:.1f} {y:.1f})"/>')
                     rr *= 1.3
+                elif st['s'].get('num') is not None:   # 编号景点：圆圈里写数字，和正文的景点编号对应
+                    rr = 7.5 * kt
+                    out.append(f'<circle class="numc" cx="{x:.1f}" cy="{y:.1f}" r="{rr:.2f}"/>'
+                               f'<text class="numt" x="{x:.1f}" y="{y:.1f}" font-size="{10 * kt:.2f}" text-anchor="middle" '
+                               f'dominant-baseline="central">{esc(st["s"]["num"])}</text>')
                 else:
                     rr = 3.6 * kt
                     out.append(f'<circle class="pass" cx="{x:.1f}" cy="{y:.1f}" r="{rr:.2f}"/>')
@@ -696,13 +767,13 @@ def main():
         svgs[rid] = (f'<svg class="rmap" viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}" style="aspect-ratio:{w:.1f}/{h:.1f}" role="img" '
                      f'aria-label="{esc(r.get("title", rid))}">'
                      f'<rect class="water" x="{x0:.1f}" y="{y0:.1f}" width="{w:.1f}" height="{h:.1f}"/>'
-                     f'<use href="#{IDP}other" class="land-o"/><use href="#{IDP}focus" class="land"/>' + CITY_USE + ''.join(body) + '</svg>')
+                     f'<use href="#{IDP}other" class="land-o"/><use href="#{IDP}focus" class="land"/>' + ADM_USE + CITY_USE + ''.join(body) + '</svg>')
 
     # ---------- 组装 ----------
     css = CSS.replace('__ASPECT__', f'{aspect:.4f}')
     defs = (f'<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>'
             f'<path id="{IDP}focus" vector-effect="non-scaling-stroke" d="{focus_d}"/>'
-            f'<path id="{IDP}other" vector-effect="non-scaling-stroke" d="{other_d}"/>{city_defs}</defs></svg>')
+            f'<path id="{IDP}other" vector-effect="non-scaling-stroke" d="{other_d}"/>{ADM_DEF}{city_defs}</defs></svg>')
     cards = []
     for ri, r in enumerate(routes):
         rid = str(r.get('id', ri + 1))
@@ -725,6 +796,9 @@ def main():
     if 'air' in used_kinds:
         li.append(f'<li><svg viewBox="0 0 44 16" aria-hidden="true"><rect class="lg-pass" x="18" y="4" width="8" height="8" '
                   f'transform="rotate(45 22 8)"/></svg>{T["air"]}</li>')
+    if 'num' in used_kinds:
+        li.append(f'<li><svg viewBox="0 0 44 16" aria-hidden="true"><circle class="lg-pass" cx="22" cy="8" r="7"/>'
+                  f'<text x="22" y="8" class="lg-num" text-anchor="middle" dominant-baseline="central">1</text></svg>{T["num"]}</li>')
     if 'pass' in used_kinds:
         li.append(f'<li><svg viewBox="0 0 44 12" aria-hidden="true"><circle class="lg-pass" cx="22" cy="6" r="3.5"/></svg>{T["pass"]}</li>')
     legend = (f'<div class="trm-card trm-legend"><div class="trm-lgt">{T["legend"]}</div><ul class="trm-lg">{"".join(li)}</ul>'
@@ -762,7 +836,7 @@ def main():
             svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}" '
                    f'width="{RENDER_W / r["_ts"]:.0f}" height="{RENDER_W / r["_ts"] / aspect:.0f}" style="--rc:{light}">'
                    f'<style>{SVG_CSS}</style><defs><path id="{IDP}focus" vector-effect="non-scaling-stroke" d="{focus_d}"/>'
-                   f'<path id="{IDP}other" vector-effect="non-scaling-stroke" d="{other_d}"/>{city_defs}</defs>{inner}{ttl}'
+                   f'<path id="{IDP}other" vector-effect="non-scaling-stroke" d="{other_d}"/>{ADM_DEF}{city_defs}</defs>{inner}{ttl}'
                    + (f'<text x="{x0 + w - 6 * k:.2f}" y="{y0 + h - 6 * k:.2f}" text-anchor="end" font-size="{9 * k:.2f}" '
                       f'class="osm-attr" stroke-width="{3 * k:.2f}">© OpenStreetMap contributors</text>' if city else '') + '</svg>')
             p = os.path.join(args.out, f'map-{safe_name(rid)}.svg')
@@ -812,6 +886,8 @@ def run_chrome(chrome, extra, page):
     with tempfile.TemporaryDirectory() as prof:
         cmd = [chrome, '--headless=new', '--disable-gpu', '--hide-scrollbars', f'--user-data-dir={prof}',
                '--virtual-time-budget=5000', *extra, 'file://' + os.path.abspath(page)]
+    if hasattr(os, 'geteuid') and os.geteuid() == 0:
+        cmd.insert(1, '--no-sandbox')  # 容器里以 root 运行时 Chrome 不加这个会直接退出
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
 
 
@@ -852,7 +928,9 @@ CSS = """
 .rmap .leg.optional{opacity:.5}
 .rmap .night{fill:var(--rc);stroke:var(--card);stroke-width:1.5px;vector-effect:non-scaling-stroke}
 .rmap .nights{fill:var(--card);font-weight:700}
-.rmap .pass,.rmap .air{fill:var(--card);stroke:var(--rc);stroke-width:1.8px;vector-effect:non-scaling-stroke}
+.rmap .pass,.rmap .air,.rmap .numc{fill:var(--card);stroke:var(--rc);stroke-width:1.8px;vector-effect:non-scaling-stroke}
+.rmap .numt{fill:var(--rc);font-weight:700}
+.rmap .adm1{fill:none;stroke:var(--coast);stroke-width:.6px;stroke-dasharray:3 2;vector-effect:non-scaling-stroke}
 .rmap .leader{fill:none;stroke:var(--muted);stroke-width:.8px;vector-effect:non-scaling-stroke}
 .rmap .lbl,.rmap .tag{paint-order:stroke;stroke:var(--land);stroke-linejoin:round}
 .rmap .lbl .nm{fill:var(--ink);font-weight:600}
@@ -870,6 +948,7 @@ CSS = """
 .trm-lg .walk{stroke-width:1.6;stroke-dasharray:.1 3}.trm-lg .transfer{stroke-width:1.4}.trm-lg .metro{stroke-width:2.2;stroke-dasharray:10 2.5}
 .trm-lg .lg-night{fill:var(--ink)}.trm-lg .lg-n{fill:var(--card);font-weight:700;font-size:10.5px}
 .trm-lg .lg-pass{fill:var(--card);stroke:var(--ink);stroke-width:1.8}
+.trm-lg .lg-num{fill:var(--ink);font-weight:700;font-size:10px}
 """
 
 SVG_CSS = """
@@ -890,7 +969,8 @@ svg{--land:#E8E9E2;--land-o:#F1F1EC;--water:#D9E6EC;--coast:#B4BAB0;--park:#D8E5
 .osm-attr{fill:var(--muted);paint-order:stroke;stroke:var(--land)}
 .leg.optional{opacity:.5}
 .night{fill:var(--rc);stroke:var(--card);stroke-width:1.5px;vector-effect:non-scaling-stroke}.nights{fill:var(--card);font-weight:700}
-.pass,.air{fill:var(--card);stroke:var(--rc);stroke-width:1.8px;vector-effect:non-scaling-stroke}
+.pass,.air,.numc{fill:var(--card);stroke:var(--rc);stroke-width:1.8px;vector-effect:non-scaling-stroke}.numt{fill:var(--rc);font-weight:700}
+.adm1{fill:none;stroke:var(--coast);stroke-width:.6px;stroke-dasharray:3 2;vector-effect:non-scaling-stroke}
 .leader{fill:none;stroke:var(--muted);stroke-width:.8px;vector-effect:non-scaling-stroke}
 .lbl,.tag,.ttl-t{paint-order:stroke;stroke:var(--land);stroke-linejoin:round}
 .lbl .nm{fill:var(--ink);font-weight:600}.lbl .sub,.tag .sub{fill:var(--muted)}.tag .nm{fill:var(--rc);font-weight:600}

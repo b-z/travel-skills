@@ -18,6 +18,8 @@ compatibility: python3 (standard library only); network access to wikipedia.org 
    - `name` 用读者的语言；`note` 写一句对行程有用的话（几点开门、冬天看不到什么、要不要预约），不要写百科简介。
    - 要不要解说卡片：见下一节。
    - 照片来源三选一，优先级从高到低：`wiki`（英文维基条目名，条目首图通常就是最经典的角度）→ `search`（Commons 搜索词，条目首图不合适时用）→ `file`（指定 Commons 文件名）。
+   - 日本、韩国、中国等地的小景点（町里的纪念馆、海岸、寺社）英文维基常常没有条目或没有首图：顶层写 `"wiki_lang": "ja"`（或 `ko`、`zh`），`wiki` 写当地语言的条目名，如 `"高知県立坂本龍馬記念館"`。
+   - 找不到景点本身的自由授权照片、只能用旁边的东西代替时（纪念馆用门前的铜像、美术馆用它所在的海岸），给这一项写 `photo_note`，如 `"竜串海岸的砂岩，不是馆内"`。卡片和署名里都会写出来，读者不会以为照片就是那个地方。
 
 2. **下载。**
 
@@ -25,14 +27,20 @@ compatibility: python3 (standard library only); network access to wikipedia.org 
    python3 "${CLAUDE_SKILL_DIR}/scripts/landmark_photos.py" fetch SPEC.json --out OUTDIR
    ```
 
-   已下载的会跳过，可以反复运行。维基的条目首图如果是地图、徽标或示意图（svg/png），脚本会自动改用 Commons 搜索。Wikimedia 会限流（HTTP 429），脚本会等待重试，所以几十张图要几分钟。不要并行跑多个下载。
+   已下载的会跳过，可以反复运行。默认存成最长边 420px 的 JPEG，够小图墙用；照片要在网页上当大图（卡片顶部整宽、手机全屏宽）时加 `--max 960 --format webp`：清晰一倍，体积和 420px JPEG 差不多。改了 `--max` 或 `--format` 再跑会自动重新下载。维基的条目首图如果是地图、徽标或示意图（svg/png），脚本会自动改用 Commons 搜索。Wikimedia 会限流（HTTP 429），脚本会等待重试，所以几十张图要几分钟。不要并行跑多个下载。
 
 3. **检查选图。** 用 Read 打开 `OUTDIR/contact.png`（检查页，带文件名和许可）。常见要换的：
    - 拍错了对象（一个人的特写、局部细节、艺术化处理过的照片、地图）；
    - 季节和行程差太多且会误导（例如冬天去的地方只有盛夏照片时，换不了就在页面上写一句"照片多是夏天拍的"）；
    - 许可后面有 ⚠ 的，确认是自由授权再用。
 
-   换图：给那一项改成 `search`（换个更具体的搜索词）或 `file`，然后 `fetch ... --refresh KEY` 重新下载。
+   换图：先看候选，再把挑中的文件名写进 `file`，然后 `fetch ... --refresh KEY` 重新下载。
+
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/scripts/landmark_photos.py" candidates SPEC.json --out OUTDIR --keys KEY1 KEY2
+   ```
+
+   每个景点列出 Commons 搜索前 8 张照片（用这一项的 `search`，没有就用 `wiki` 或 `name` 当搜索词），终端里打印文件名、原图尺寸、许可，`OUTDIR/candidates.png` 是带编号的缩略图表，用 Read 打开挑。原图不到 960px 宽的尺寸标红，放大图会发虚。比反复改搜索词、一张张 fetch 快得多。
 
 4. **生成。**
 
@@ -46,7 +54,14 @@ compatibility: python3 (standard library only); network access to wikipedia.org 
    - `--fragment`：`gallery.fragment.html` + `gallery.css`，嵌进已有网页用。
 
 5. **交付。**
-   - 放进 Artifact 网页：Artifact 的 CSP 不允许加载外部图片，所以不能直接引用 upload.wikimedia.org。把 `OUTDIR/img/*.jpg` 作为页面的附带文件一起发布（路径保持 `img/<key>.jpg`），或者用 `--embed` 内嵌。
+   - 放进 Artifact 网页：Artifact 的 CSP 不允许加载外部图片，所以不能直接引用 upload.wikimedia.org。把 `OUTDIR/img/*` 作为页面的附带文件一起发布（路径保持 `img/<文件名>`），或者用 `--embed` 内嵌。
+   - 网页自己排版、照片要放进各自的卡片（比如行程网页里每个景点一张卡片）而不是一整面图墙时，用 `assets`：
+
+     ```bash
+     python3 "${CLAUDE_SKILL_DIR}/scripts/landmark_photos.py" assets SPEC.json --out OUTDIR
+     ```
+
+     得到 `assets.json`（每个 key 的 `src` 是 data URI，另有 `name`、`photo_note`、`title`（作者 · 许可，放进 `<img title>`）、`credit`）和 `credits.fragment.html`（署名列表，放在页面末尾）。超过 12 MB 会提醒，Artifact 上限 16 MB。
    - 图片、PDF：直接给文件。
 
 ## 解说卡片
